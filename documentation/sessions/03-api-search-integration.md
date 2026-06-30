@@ -4,7 +4,9 @@
 > **Date:** 2026-06-29, 02:28–03:04 local (~36 min)
 > **Status:** Shipped. Feature compiles clean (typecheck + production build green) and the CSV parser is empirically verified against the real reference export. Live Supabase write is unverified end-to-end (runs in **demo mode** until credentials are added). Auth gate is an explicit pre-production TODO.
 > **Primary tools used:** Read, Write, Edit, Bash, Glob, Grep, AskUserQuestion, Workflow (background adversarial review)
-> **Related sessions:** [01-ui-foundation-dashboard.md](./01-ui-foundation-dashboard.md) · [02-integrations-tab-n8n.md](./02-integrations-tab-n8n.md) · [04-dev-server-enoent-fix.md](./04-dev-server-enoent-fix.md) · [05-session-documentation.md](./05-session-documentation.md)
+> **Related sessions:** [01-ui-foundation-dashboard.md](./01-ui-foundation-dashboard.md) · [02-integrations-tab-n8n.md](./02-integrations-tab-n8n.md) · [04-dev-server-enoent-fix.md](./04-dev-server-enoent-fix.md) · [05-session-documentation.md](./05-session-documentation.md) · [09-pipeline-supabase-live.md](./09-pipeline-supabase-live.md)
+
+> ⏩ **This session continued well past this doc.** This write-up covers the importer in **demo mode** only. The same session (`5fc1ceac`, which ran into 2026-06-30) then went **live** on a real Supabase instance and added the stored-leads viewer, per-upload folders, and a standalone Leads tab — documented separately in **[Session 09 — Pipeline goes live on Supabase](./09-pipeline-supabase-live.md)**.
 
 ## Objective
 

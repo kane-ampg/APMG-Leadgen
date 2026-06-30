@@ -4,7 +4,9 @@
 > **Date:** 2026-06-29, 01:19–02:58 local (~1h39m)
 > **Status:** Completed — scaffolded from empty repo, built, reviewed, fixed, and visually verified on Next.js 16
 > **Primary tools used:** Write/Edit (source files), Bash (npm, builds, Playwright servers), Workflow (design panel + adversarial review subagents), Read (transcripts + screenshots), Playwright (verification screenshots), AskUserQuestion, TodoWrite
-> **Related sessions:** [02-integrations-tab-n8n.md](02-integrations-tab-n8n.md) · [03-api-search-integration.md](03-api-search-integration.md) · [04-dev-server-enoent-fix.md](04-dev-server-enoent-fix.md) · [05-session-documentation.md](05-session-documentation.md)
+> **Related sessions:** [02-integrations-tab-n8n.md](02-integrations-tab-n8n.md) · [03-api-search-integration.md](03-api-search-integration.md) · [04-dev-server-enoent-fix.md](04-dev-server-enoent-fix.md) · [05-session-documentation.md](05-session-documentation.md) · [07-rbac-permission-first.md](07-rbac-permission-first.md) · [08-sales-pipeline-attribution.md](08-sales-pipeline-attribution.md)
+
+> ⏩ **This session continued well past this doc.** This write-up covers only the UI-foundation work (Overview, sidebar, footer, telemetry, KPI/greeting). The same session (`c954dda6`, which ran until ~08:49 local) then went on to build the permission-first RBAC layer and the full Sales pipeline — documented separately in **[Session 07 — RBAC](07-rbac-permission-first.md)** and **[Session 08 — Sales pipeline](08-sales-pipeline-attribution.md)**.
 
 ## Objective
 The user wanted a lead-generation dashboard for APMG Services with a black/red theme that defaults to dark mode but offers a light-mode toggle. The concrete brief: a sidebar with an **Overview** page containing 3 KPI cards across the top and a histogram side-by-side with a small table below, a footer reading "Developed by APMG @currentYear", and click telemetry wired in. A later request in the same session asked to clean up the KPI cards (they looked "separated like my parents") and add a personal greeting ("Hi, Kane Reroma").

@@ -4,7 +4,9 @@
 > **Date:** 2026-06-29, 02:53–02:56 local (~3 minutes)
 > **Status:** Resolved ✅
 > **Primary tools used:** PowerShell (9 calls), Read (4 calls)
-> **Related sessions:** [01-ui-foundation-dashboard.md](01-ui-foundation-dashboard.md) · [02-integrations-tab-n8n.md](02-integrations-tab-n8n.md) · [03-api-search-integration.md](03-api-search-integration.md) · [05-session-documentation.md](05-session-documentation.md)
+> **Related sessions:** [01-ui-foundation-dashboard.md](01-ui-foundation-dashboard.md) · [02-integrations-tab-n8n.md](02-integrations-tab-n8n.md) · [03-api-search-integration.md](03-api-search-integration.md) · [05-session-documentation.md](05-session-documentation.md) · [10-eod-update-chunkload-fix.md](10-eod-update-chunkload-fix.md)
+
+> 🔁 **Related recurrence:** a later session hit a *different* `.next` corruption — a `ChunkLoadError` from one `.next` directory holding **both** a production build and a dev session (vs. the three-servers-sharing-`.next` `ENOENT` here). See **[Session 10](10-eod-update-chunkload-fix.md)**.
 
 ## Objective
 

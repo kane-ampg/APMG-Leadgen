@@ -1,15 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { TAB_LABEL, type TabId } from "@/lib/nav";
+import { firstAllowedTab, TAB_LABEL, TAB_PERMISSION, type TabId } from "@/lib/nav";
 import { useClickTelemetry } from "@/lib/telemetry";
+import { useRbac } from "@/lib/rbac/RbacProvider";
 import { ClickPing } from "./ClickPing";
 import { CommandBar } from "./CommandBar";
+import { ClosedDealsPage } from "./ClosedDealsPage";
 import { ComingSoon } from "./ComingSoon";
 import { IntegrationsPage } from "./IntegrationsPage";
 import { MobileHeader } from "./MobileHeader";
 import { OverviewPage } from "./OverviewPage";
+import { LeadsPage } from "./LeadsPage";
+import { PipelinePage } from "./PipelinePage";
+import { SalesPage } from "./SalesPage";
 import { Sidebar } from "./Sidebar";
 import { TelemetryInspector } from "./TelemetryInspector";
 
@@ -22,6 +27,13 @@ export function DashboardShell() {
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [navOpen, setNavOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
+  const { can } = useRbac();
+  const fallbackTab = useMemo(() => firstAllowedTab(can), [can]);
+
+  // Keep the active tab within what the current role is permitted to open.
+  useEffect(() => {
+    if (!can(TAB_PERMISSION[activeTab])) setActiveTab(fallbackTab);
+  }, [can, activeTab, fallbackTab]);
 
   // Attach the delegated click-telemetry listener for the active view.
   useClickTelemetry(activeTab);
@@ -85,6 +97,14 @@ export function DashboardShell() {
               >
                 {activeTab === "overview" ? (
                   <OverviewPage />
+                ) : activeTab === "pipeline" ? (
+                  <PipelinePage />
+                ) : activeTab === "leads" ? (
+                  <LeadsPage />
+                ) : activeTab === "sales" ? (
+                  <SalesPage />
+                ) : activeTab === "closed" ? (
+                  <ClosedDealsPage />
                 ) : activeTab === "integrations" ? (
                   <IntegrationsPage />
                 ) : (

@@ -4,22 +4,31 @@
  * not an empty shell. Swap this module for a data layer when wiring a backend.
  */
 
+import type { KpiFormat } from "@/lib/format";
+
 export interface Kpi {
   id: string;
   label: string;
-  /** canonical display string (used for SSR + reduced motion) */
+  /** canonical display string (used for SSR + reduced motion + null readouts) */
   value: string;
   /** raw value for the odometer count-up */
   numeric: number;
-  format: "int" | "pct" | "usd";
-  /** signed percentage/point change vs the comparison window */
-  delta: number;
-  deltaUnit: "%" | "pts";
+  format: KpiFormat;
+  /** signed percentage/point change vs the comparison window (optional — only
+   *  rendered when we have a real comparison; pipeline cards usually omit it) */
+  delta?: number;
+  deltaUnit?: "%" | "pts";
   /** when true a downward delta is the good outcome (e.g. cost per lead) */
   goodWhenDown?: boolean;
-  caption: string;
-  /** sparkline series, oldest → newest, normalized later */
-  spark: number[];
+  caption?: string;
+  /** foot A — sparkline series, oldest → newest (needs ≥ 2 points to render) */
+  spark?: number[];
+  /** foot B — a labelled proportion bar, 0–1 (shown when there's no spark) */
+  ratio?: { value: number; label: string };
+  /** render a skeleton readout while the underlying data is still loading */
+  loading?: boolean;
+  /** show `value` verbatim instead of counting up (for "—" / N/A readouts) */
+  noCountUp?: boolean;
 }
 
 export interface Bar {

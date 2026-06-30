@@ -1,9 +1,11 @@
-export type KpiFormat = "int" | "pct" | "usd";
+export type KpiFormat = "int" | "pct" | "usd" | "usd0" | "rating";
 
 /** Format a KPI numeric into its display string. */
 export function formatKpi(n: number, format: KpiFormat): string {
   if (format === "pct") return `${n.toFixed(1)}%`;
   if (format === "usd") return `$${n.toFixed(2)}`;
+  if (format === "usd0") return `$${Math.round(n).toLocaleString("en-US")}`;
+  if (format === "rating") return n.toFixed(1);
   return Math.round(n).toLocaleString("en-US");
 }
 

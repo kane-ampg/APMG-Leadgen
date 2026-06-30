@@ -1,8 +1,7 @@
 "use client";
 
-import { cn } from "@/lib/cn";
-import { RECENT_LEADS, type LeadRow, type LeadStatus } from "@/lib/data/leads";
-import { formatUsd } from "@/lib/format";
+import { Inbox, Star } from "lucide-react";
+import type { LeadView } from "./pipeline/LeadsTable";
 import {
   Table,
   TableBody,
@@ -12,116 +11,110 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-const HOT_THRESHOLD = 85;
-
-/* Status stays inside the black/red + neutral system — no extra hues.
-   Red marks the favourable end (qualified / won); muted marks the rest. */
-const STATUS: Record<LeadStatus, { label: string; className: string }> = {
-  new: { label: "New", className: "border-border bg-muted text-muted-foreground" },
-  contacted: { label: "Contacted", className: "border-border bg-background text-foreground/80" },
-  qualified: {
-    // bg-transparent keeps Signal-red text on the solid card (4.75:1 AA) —
-    // a /10 tint would lighten the local bg and drop it to 4.38:1.
-    label: "Qualified",
-    className: "border-primary/40 bg-transparent text-primary",
-  },
-  // solid fill uses the darker primary-solid so WHITE text passes AA.
-  won: { label: "Won", className: "border-transparent bg-primary-solid text-primary-foreground" },
-  lost: {
-    label: "Lost",
-    className: "border-border bg-transparent text-muted-foreground line-through decoration-muted-foreground/40",
-  },
-};
-
-function StatusPill({ status }: { status: LeadStatus }) {
-  const s = STATUS[status];
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]",
-        s.className,
-      )}
-    >
-      {s.label}
-    </span>
-  );
+function Dash() {
+  return <span className="text-muted-foreground/50">—</span>;
 }
 
-function Row({ lead }: { lead: LeadRow }) {
-  const hot = lead.score >= HOT_THRESHOLD;
-  return (
-    <TableRow
-      tabIndex={0}
-      role="button"
-      data-track="lead_row"
-      data-track-lead={lead.id}
-      data-track-status={lead.status}
-      aria-label={`Lead ${lead.name}, ${lead.company}, score ${lead.score}, ${lead.status}`}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          e.currentTarget.click();
-        }
-      }}
-      className="cursor-pointer outline-none hover:shadow-[inset_2px_0_0_0_hsl(var(--primary))] focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))]"
-    >
-      <TableCell className="py-2.5">
-        <div className="text-[13px] font-medium text-foreground">{lead.name}</div>
-        <div className="mt-px truncate font-mono text-[10.5px] text-muted-foreground">
-          {lead.company} · {lead.source}
-        </div>
-      </TableCell>
-      <TableCell className="text-right">
-        <span className="tnum inline-flex items-center justify-end gap-1 font-mono text-[13px] text-foreground">
-          {hot && (
-            <span
-              className="h-1.5 w-1.5 rounded-full bg-primary"
-              aria-label="hot lead"
-              role="img"
-            />
-          )}
-          {lead.score}
-        </span>
-      </TableCell>
-      <TableCell>
-        <StatusPill status={lead.status} />
-      </TableCell>
-      <TableCell className="tnum text-right font-mono text-[13px] text-foreground">
-        {formatUsd(lead.value)}
-      </TableCell>
-    </TableRow>
-  );
+function prettyUrl(url: string): string {
+  return url.replace(/^https?:\/\//, "").replace(/\/$/, "");
 }
 
-export function RecentLeadsTable() {
+function ratingText(rating: LeadView["rating"]): string | null {
+  if (rating == null || rating === "") return null;
+  const n = typeof rating === "number" ? rating : Number.parseFloat(rating);
+  return Number.isFinite(n) ? n.toFixed(1) : null;
+}
+
+/**
+ * Most-recent leads, straight from the pipeline (`public.leads`). Columns are
+ * the real scraped fields — business, rating, email count, phone — not the
+ * fabricated score/value of the old preset.
+ */
+export function RecentLeadsTable({
+  rows,
+  title = "Recent leads",
+  meta = "latest",
+  emptyHint = "No leads imported yet.",
+}: {
+  rows: LeadView[];
+  title?: string;
+  meta?: string;
+  emptyHint?: string;
+}) {
   return (
     <section
       className="flex h-full min-w-0 flex-col rounded-xl bg-card ring-1 ring-foreground/10"
-      aria-label="Recent leads"
+      aria-label={title}
     >
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <h2 className="font-heading text-sm font-semibold text-foreground">Recent leads</h2>
+        <h2 className="font-heading text-sm font-semibold text-foreground">{title}</h2>
         <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-          last 24h
+          {meta}
         </span>
       </div>
-      <div className="min-w-0 px-2 pb-1">
-        <Table>
-          <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead>Lead</TableHead>
-              <TableHead className="text-right">Score</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Value</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {RECENT_LEADS.map((lead) => (
-              <Row key={lead.id} lead={lead} />
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+
+      {rows.length === 0 ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+          <span className="flex h-11 w-11 items-center justify-center rounded-2xl border border-border bg-background text-muted-foreground">
+            <Inbox className="h-5 w-5" aria-hidden />
+          </span>
+          <p className="max-w-[14rem] font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+            {emptyHint}
+          </p>
+        </div>
+      ) : (
+        <div className="min-w-0 px-2 pb-1">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Business</TableHead>
+                <TableHead className="text-right">Rating</TableHead>
+                <TableHead className="text-right">Emails</TableHead>
+                <TableHead className="text-right">Phone</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r, i) => {
+                const rt = ratingText(r.rating);
+                const sub = r.website ? prettyUrl(r.website) : r.address ?? null;
+                return (
+                  <TableRow
+                    key={r.id ?? i}
+                    data-track="lead_row"
+                    data-track-lead={r.id}
+                    className="hover:bg-muted/40"
+                  >
+                    <TableCell className="max-w-[220px] py-2.5">
+                      <div className="truncate text-[13px] font-medium text-foreground">{r.name}</div>
+                      {sub && (
+                        <div className="mt-px truncate font-mono text-[10.5px] text-muted-foreground">
+                          {sub}
+                        </div>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {rt ? (
+                        <span className="tnum inline-flex items-center justify-end gap-1 font-mono text-[13px] text-foreground">
+                          <Star className="h-3 w-3 text-muted-foreground" aria-hidden />
+                          {rt}
+                        </span>
+                      ) : (
+                        <Dash />
+                      )}
+                    </TableCell>
+                    <TableCell className="tnum text-right font-mono text-[13px] text-foreground">
+                      {r.emails?.length || <Dash />}
+                    </TableCell>
+                    <TableCell className="tnum text-right font-mono text-[12px] text-foreground">
+                      {r.phone ?? <Dash />}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        </div>
+      )}
     </section>
   );
 }

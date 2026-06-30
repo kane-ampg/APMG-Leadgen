@@ -2,6 +2,7 @@
 
 import { Activity } from "lucide-react";
 import { TAB_LABEL, type TabId } from "@/lib/nav";
+import { Can } from "@/components/rbac/Can";
 import { SignalTicker } from "./SignalTicker";
 
 /** Editorial command bar (ui-standards §3.2.1): breadcrumb + live signal + actions. */
@@ -27,16 +28,18 @@ export function CommandBar({
 
       <div className="ml-auto flex items-center gap-3">
         <SignalTicker />
-        <button
-          type="button"
-          data-track="open_telemetry"
-          onClick={onOpenTelemetry}
-          aria-label="Open telemetry inspector"
-          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-        >
-          <Activity className="h-3.5 w-3.5" aria-hidden />
-          <span className="hidden sm:inline">Telemetry</span>
-        </button>
+        <Can perm="telemetry.view">
+          <button
+            type="button"
+            data-track="open_telemetry"
+            onClick={onOpenTelemetry}
+            aria-label="Open telemetry inspector"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+          >
+            <Activity className="h-3.5 w-3.5" aria-hidden />
+            <span className="hidden sm:inline">Telemetry</span>
+          </button>
+        </Can>
       </div>
     </header>
   );

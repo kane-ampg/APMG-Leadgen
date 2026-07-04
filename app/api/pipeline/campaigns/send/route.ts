@@ -158,7 +158,8 @@ export async function POST(req: Request): Promise<Response> {
   const base = process.env.NEXT_PUBLIC_TRACK_BASE || new URL(req.url).origin;
   // Resolve each recipient's Category to a Sector Playbook so the matching
   // portfolio PDF is attached (Sector Playbooks tab). Unmatched categories /
-  // sectors without a PDF simply send with no attachment.
+  // sectors without a PDF simply send with no attachment. n8n downloads
+  // `attachment.url` and attaches it as `attachment.filename`.
   const playbooks = await loadPlaybooks();
   const messages = recipients.map((r) => {
     const sector = resolveSectorForCategory(r.category, playbooks);
@@ -168,7 +169,6 @@ export async function POST(req: Request): Promise<Response> {
       leadId: r.id,
       subject: renderSubject(r.subject ?? subject, { business: r.business }),
       html: renderBody(r.html ?? bodyHtml, { business: r.business, link: trackedLink(base, r.id, campaign) }),
-      // n8n downloads `attachment.url` and attaches it as `attachment.filename`.
       // Omitted (undefined → dropped by JSON.stringify) when no PDF applies.
       attachment: attachmentUrl && sector?.pdf ? { url: attachmentUrl, filename: sector.pdf.name } : undefined,
     };

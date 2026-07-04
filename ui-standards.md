@@ -923,16 +923,17 @@ reason):
 | Tiny caps (most common) | `text-[10px] font-semibold uppercase tracking-[0.14em]` | Labels everywhere |
 | Ultra-tiny caps | `text-[9px] uppercase tracking-[0.18em]` | Date stamps, ledger column labels |
 
-Fonts:
+Fonts — **two typefaces only** (Inter + Plus Jakarta Sans; no monospace):
 
-- `font-sans` is the default body family (whatever Tailwind's defaults resolve
-  in this config).
-- `font-mono` is used for: emails, employee IDs, all numeric tabular data
-  (`tabular-nums` always), file names, transaction IDs, dates in stamp form,
-  and tiny-caps captions.
-- `font-heading` is referenced by `Card.CardTitle` and `Dialog.DialogTitle`
-  but not heavily customized — the project uses it as a synonym for the
-  default sans family.
+- `font-sans` → **Inter**. The default body/UI family, and also what numbers,
+  IDs and emails now render in.
+- `font-heading` → **Plus Jakarta Sans**. All semantic headings (`h1`–`h6`) get
+  this by default via a base rule; `Card.CardTitle` / `Dialog.DialogTitle` also
+  opt in with the `font-heading` class.
+- `font-mono` is **retained as a class name only** for back-compat: it maps to
+  Inter (not a monospace) so the ~200 existing `font-mono` usages keep working
+  and figures still align via `tabular-nums`. Don't add new `font-mono` — use
+  `tabular-nums` alone for aligned numbers.
 
 Tracking conventions:
 
@@ -941,8 +942,9 @@ Tracking conventions:
 - Hero numbers: `tracking-tight`
 
 Tabular numerals (`tabular-nums`) is **mandatory** for any column or stat
-that aligns under another number. The two together (`font-mono tabular-nums`)
-are the canonical "money / hours / counters" treatment.
+that aligns under another number — it is the canonical "money / hours /
+counters" treatment on its own (Inter has proper tabular figures; no monospace
+needed).
 
 ---
 
@@ -1170,8 +1172,9 @@ Every new surface must:
 - Sidebar: 220px editorial, all five §2.3 slots; active nav uses `bg-accent/60`
   + a 2px `bg-primary` left rule + red icon (not the zinc reverse). Sections:
   Monitor / Automate / System.
-- Type: Inter (UI) + JetBrains Mono; **mono tabular numerals are the hero**
-  (KPI readouts, signal ticker, table figures).
+- Type: **two readable typefaces** — Inter (body/UI/numbers) + Plus Jakarta
+  Sans (headings); `tabular-nums` keeps KPI readouts, the signal ticker and
+  table figures aligned (no monospace).
 - Signature: the **click telemetry IS the identity** — a live signal ticker +
   "pings" counter, a pulsing status LED, and a click-ping bloom on every tracked
   click. Telemetry lives in `lib/telemetry.ts`: a delegated `[data-track]`
@@ -1179,7 +1182,7 @@ Every new surface must:
   and ships to `NEXT_PUBLIC_TELEMETRY_ENDPOINT` via `sendBeacon` (local-only
   inspector drawer when unset).
 - Surfaces: **Overview** (3 KPI gauge cards → histogram beside a recent-leads
-  table → footer "Developed by APMG © {year}"); **Integrations** (n8n
+  table → footer "Developed by APMG AI Team © {year}"); **Integrations** (n8n
   automation cards with role=switch toggles + connection status). Others use a
   shared "not wired yet" placeholder.
 - Red discipline: **Signal `#FF2E1F`** for live/active/short red text (AA on

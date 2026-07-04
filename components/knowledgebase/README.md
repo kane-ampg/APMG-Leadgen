@@ -20,6 +20,11 @@ critical framing — APMG does **property maintenance for** these facilities, it
 **not** a lead-generation agency — so drafts never revert to a "more customers"
 pitch. The sector file adds the specifics for that Category.
 
+**Overriding a sector file at runtime:** the **Sector Playbooks** tab lets an admin
+upload a `.md` to override any sector file (stored in `app_settings`, used instead
+of the repo copy); "Revert to built-in" removes it. `business.md` is edited only
+here in the repo. See `references/SECTOR-PLAYBOOKS.md`.
+
 Select the **one** file that matches the lead's CSV `Category`, not all three. Each doc is
 scoped to its sector (there's a "Sector focus note" at the top telling the model to stay in
 lane). If a lead's category doesn't map to any of these, fall back to no KB rather than

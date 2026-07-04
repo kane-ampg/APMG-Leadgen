@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
+import { Inter, Plus_Jakarta_Sans } from "next/font/google";
 import { THEME_BOOTSTRAP } from "@/lib/theme";
 import "./globals.css";
 
@@ -9,11 +9,12 @@ const sans = Inter({
   display: "swap",
 });
 
-// Monospace numerals are the typographic signature — the dashboard reads its
-// numbers like an instrument (ui-standards §13: font-mono + tabular-nums).
-const mono = JetBrains_Mono({
+// Two readable typefaces only (ui-standards §13). Inter carries body, UI, and
+// numbers; Plus Jakarta Sans gives headings a distinct but friendly voice.
+// No monospace — numbers stay aligned via `tabular-nums`, not a terminal font.
+const heading = Plus_Jakarta_Sans({
   subsets: ["latin"],
-  variable: "--font-mono",
+  variable: "--font-heading",
   display: "swap",
 });
 
@@ -31,7 +32,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${sans.variable} ${mono.variable} dark`}
+      className={`${sans.variable} ${heading.variable} dark`}
       suppressHydrationWarning
     >
       <head>

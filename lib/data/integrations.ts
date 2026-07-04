@@ -79,7 +79,7 @@ export const INTEGRATIONS: IntegrationMeta[] = [
     envVar: "N8N_CAMPAIGN_WEBHOOK_URL",
     name: "Campaign Send",
     description:
-      "Confirming a send in Pipeline → Send Campaigns POSTs the rendered outreach emails here. The automation sends each message via Gmail and attaches the sector portfolio PDF resolved from the lead's category (Sector Playbooks).",
+      "Confirming a send in Pipeline → Send Campaigns POSTs the rendered outreach emails here. The automation sends each message via Gmail (the email copy is grounded per category by the Sector Playbooks knowledge base at compose time).",
     trigger: "webhook",
     webhookPath: "/webhook/campaign-send",
     workflowFile: "Campaign Send Automation.json",

@@ -11,8 +11,30 @@ const config: Config = {
     extend: {
       fontFamily: {
         sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ["var(--font-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
-        heading: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
+        // The `font-mono` class is used app-wide for numbers, IDs and emails.
+        // It now resolves to Inter (not a monospace) so figures read cleanly and
+        // stay aligned via `tabular-nums` — no more terminal look.
+        mono: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
+        heading: [
+          "var(--font-heading)",
+          "ui-sans-serif",
+          "system-ui",
+          "sans-serif",
+        ],
+      },
+      // A little bigger than Tailwind's defaults (~1 step up): body 14→15,
+      // base 16→17, etc. Keeps the layout tight while improving readability.
+      fontSize: {
+        xs: ["0.8125rem", { lineHeight: "1.125rem" }], // 13px
+        sm: ["0.9375rem", { lineHeight: "1.375rem" }], // 15px
+        base: ["1.0625rem", { lineHeight: "1.625rem" }], // 17px
+        lg: ["1.1875rem", { lineHeight: "1.875rem" }], // 19px
+        xl: ["1.375rem", { lineHeight: "1.875rem" }], // 22px
+        "2xl": ["1.625rem", { lineHeight: "2.125rem" }], // 26px
+        "3xl": ["2rem", { lineHeight: "2.375rem" }], // 32px
+        "4xl": ["2.375rem", { lineHeight: "2.625rem" }], // 38px
+        "5xl": ["3.25rem", { lineHeight: "1" }], // 52px
+        "6xl": ["4rem", { lineHeight: "1" }], // 64px
       },
       colors: {
         // Semantic tokens (shadcn-style) driven by CSS vars in globals.css so

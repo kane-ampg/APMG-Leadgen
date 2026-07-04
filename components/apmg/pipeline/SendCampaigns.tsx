@@ -32,6 +32,7 @@ import {
   DEFAULT_BODY_HTML,
   DEFAULT_CAMPAIGN,
   DEFAULT_SUBJECT,
+  isEmail,
   MAX_COMPOSE_LEADS,
   MAX_RECIPIENTS,
   MERGE_TOKENS,
@@ -61,7 +62,7 @@ const UNGROUPED = "__ungrouped__";
 
 type SendPhase = "idle" | "sending" | "done" | "error";
 type SendMode = "live" | "demo" | "noop";
-// AI drafting via the n8n compose automation (Compose Email Automation.json)
+// AI drafting via the in-app composer (app/api/pipeline/campaigns/compose)
 type ComposePhase = "idle" | "running" | "ready" | "error";
 type DraftMode = "template" | "ai";
 type Recipient = { id: string; email: string; business: string; subject?: string; html?: string; category?: string | null };
@@ -76,7 +77,7 @@ function folderLabel(batch: string): string {
  *  Blanking any of these in review takes the lead out of the send (rather than
  *  silently falling back to the shared template server-side). */
 function draftSendable(d: ComposeDraft): boolean {
-  return !!d.best_email && d.subject.trim().length > 0 && d.html.trim().length > 0;
+  return isEmail(d.best_email ?? "") && d.subject.trim().length > 0 && d.html.trim().length > 0;
 }
 
 /** Resolve the host the tracked CTA links point at (build-pinned or this origin). */
@@ -92,11 +93,10 @@ type LoadState =
 /**
  * Send Campaigns (Automation) — the Pipeline sub-tab that turns stored leads
  * into a tracked outreach send. Three n8n-style nodes:
- *   1. Audience      — pick leads with a stored email OR a scrapeable website
- *   2. Compose       — "Compose email" hands the selection to the n8n compose
- *                      automation: it extracts up to 10 emails per lead (CSV
- *                      first, contact-page scrape as fallback) and Claude
- *                      drafts a per-lead email tailored to the CSV Category.
+ *   1. Audience      — pick leads with a stored email (or a website, to hand-address in review)
+ *   2. Compose       — "Compose email" drafts a per-lead email in-app with
+ *                      Claude (app/api/pipeline/campaigns/compose), grounded in
+ *                      the sector knowledge base for the lead's CSV Category.
  *                      Drafts are reviewed one by one (or select-all) and are
  *                      editable; selections above the AI cap fall back to the
  *                      shared {{business}}/{{link}} template editor.
@@ -126,7 +126,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   const [draftMode, setDraftMode] = useState<DraftMode>("template");
   const [composePhase, setComposePhase] = useState<ComposePhase>("idle");
   const [composeError, setComposeError] = useState<string | null>(null);
-  const [composeInfo, setComposeInfo] = useState<{ mode: "live" | "demo"; saved: number } | null>(null);
+  const [composeInfo, setComposeInfo] = useState<{ mode: "live" | "demo"; saved: number; drafted: number } | null>(null);
   const [drafts, setDrafts] = useState<ComposeDraft[]>([]);
   // draft ids approved for the send (review one by one, or select all at once)
   const [approved, setApproved] = useState<Set<string>>(new Set());
@@ -185,8 +185,8 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     fetchLeads();
   }, [fetchLeads]);
 
-  // leads we can campaign: a stable id + a stored address, or a website the
-  // compose automation can scrape one from
+  // leads we can campaign: a stable id + a stored address, or a website (which
+  // can be hand-addressed while reviewing the draft)
   const targets = useMemo<LeadView[]>(
     () =>
       load.status === "ready"
@@ -300,10 +300,11 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     });
   }
 
-  /** "Compose email" — hand the selection to the n8n compose automation, which
-   *  extracts each lead's emails (CSV first, website scrape as fallback) and
-   *  has Claude draft a per-lead email tailored to the CSV Category. Selections
-   *  above the AI cap fall back to the shared template editor. */
+  /** "Compose email" — send the selection to the in-app composer, which drafts
+   *  a per-lead email with Claude grounded in the sector knowledge base for the
+   *  lead's Category. Addresses come from the stored CSV emails (or are added by
+   *  hand in review). Selections above the AI cap fall back to the shared
+   *  template editor. */
   const startCompose = useCallback(async () => {
     setSelected(1);
     if (pickedTargets.length === 0 || pickedTargets.length > MAX_COMPOSE_LEADS) {
@@ -342,17 +343,17 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       });
     } catch {
       if (live()) {
-        setComposeError("Network error reaching the compose automation.");
+        setComposeError("Network error reaching the composer.");
         setComposePhase("error");
       }
       return;
     }
     const data = (await res.json().catch(() => null)) as
-      | { ok?: boolean; mode?: "live" | "demo"; results?: ComposeDraft[]; saved?: number; error?: string }
+      | { ok?: boolean; mode?: "live" | "demo"; results?: ComposeDraft[]; drafted?: number; saved?: number; error?: string }
       | null;
     if (!live()) return;
     if (!res.ok || !data?.ok || !Array.isArray(data.results)) {
-      setComposeError(data?.error ?? `The compose automation responded ${res.status}.`);
+      setComposeError(data?.error ?? `The composer responded ${res.status}.`);
       setComposePhase("error");
       return;
     }
@@ -362,7 +363,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     // everything sendable starts approved — deselect while reviewing
     setApproved(new Set(results.filter(draftSendable).map((d) => d.id)));
     setDraftIdx(0);
-    setComposeInfo({ mode: data.mode ?? "demo", saved: data.saved ?? 0 });
+    setComposeInfo({ mode: data.mode ?? "demo", saved: data.saved ?? 0, drafted: data.drafted ?? 0 });
     // record the composed audience so an audience change invalidates these drafts
     composedIdsRef.current = new Set(batch.map((r) => r.id!));
     setComposePhase("ready");
@@ -383,6 +384,15 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
 
   function editDraft(id: string, patch: Partial<Pick<ComposeDraft, "subject" | "html" | "best_email">>) {
     setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+    // If this edit makes a previously-unsendable draft sendable — e.g. the user
+    // hand-typed an address for a website-only lead — auto-include it, mirroring
+    // the compose-time seeding where every sendable draft starts approved.
+    setApproved((ap) => {
+      const before = drafts.find((d) => d.id === id);
+      if (!before || ap.has(id)) return ap;
+      const after = { ...before, ...patch };
+      return !draftSendable(before) && draftSendable(after) ? new Set(ap).add(id) : ap;
+    });
   }
   function toggleDraft(id: string) {
     setApproved((prev) => {
@@ -547,7 +557,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       if (draftMode === "ai" && composePhase === "error") {
         return (
           <ComposeErrorPanel
-            message={composeError ?? "The compose automation failed."}
+            message={composeError ?? "The composer failed."}
             onRetry={startCompose}
             onUseTemplate={() => setDraftMode("template")}
           />
@@ -638,10 +648,6 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
             <h1 className="mt-1 text-base font-semibold tracking-tight text-foreground sm:text-xl">
               Send campaigns
             </h1>
-          </div>
-          <div className="text-right font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-            <div>Attribution</div>
-            <div className="tnum text-foreground/80">/t/&lt;lead&gt;?c=…</div>
           </div>
         </div>
       </Reveal>
@@ -799,7 +805,7 @@ function AudiencePanel({
           <p className="max-w-xs font-mono text-[10.5px] leading-relaxed text-muted-foreground">
             {load.mode === "demo"
               ? "Connect Supabase, then import a CSV from the Leads tab — leads with an email or website show up here."
-              : "Import a CSV from the Leads tab. Leads with an email address — or a website the automation can scrape one from — become campaign recipients."}
+              : "Import a CSV from the Leads tab. Leads with an email address — or a website you can hand-address in review — become campaign recipients."}
           </p>
           {onSwitchToLeads && (
             <Button variant="outline" size="sm" onClick={onSwitchToLeads} data-track="campaign_goto_leads" className="mt-1 gap-1.5">
@@ -878,8 +884,8 @@ function AudiencePanel({
                 : selectedCount > MAX_COMPOSE_LEADS
                   ? `AI drafting handles up to ${MAX_COMPOSE_LEADS} leads per run — larger selections use the shared template${scrapeCount > 0 ? `, which skips the ${scrapeCount.toLocaleString("en-US")} without a stored email` : ""}.`
                   : scrapeCount > 0
-                    ? `${scrapeCount.toLocaleString("en-US")} selected lead${scrapeCount === 1 ? " has" : "s have"} no stored email — the automation scrapes their website when you compose.`
-                    : "Compose hands each lead to Claude for a tailored draft (max 10 emails per lead)."}
+                    ? `${scrapeCount.toLocaleString("en-US")} selected lead${scrapeCount === 1 ? " has" : "s have"} no stored email — Claude still drafts them; add an address while reviewing.`
+                    : "Compose drafts each lead with Claude, grounded in its sector knowledge base."}
             </p>
             <Button
               data-track="campaign_next_compose"
@@ -1029,8 +1035,8 @@ function ComposePanel({
           <span className="text-foreground/80">{recipients.length.toLocaleString("en-US")}</span> selected lead
           {recipients.length === 1 ? "" : "s"} with a stored email —{" "}
           <span className="text-foreground/80">{droppedCount.toLocaleString("en-US")}</span> website-only lead
-          {droppedCount === 1 ? "" : "s"} {droppedCount === 1 ? "is" : "are"} skipped. Compose {MAX_COMPOSE_LEADS} or
-          fewer to scrape their sites with AI.
+          {droppedCount === 1 ? "" : "s"} {droppedCount === 1 ? "is" : "are"} skipped. Draft with AI ({MAX_COMPOSE_LEADS} or
+          fewer) to write them and add an address in review.
         </p>
       )}
 
@@ -1061,11 +1067,11 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 /* ─────────────────────────────  AI drafts  ───────────────────────────── */
 
-/** Shown while the n8n compose automation extracts emails + Claude drafts. */
+/** Shown while Claude drafts each lead's email in-app, grounded in the KB. */
 function DraftingPanel({ count, scrapeCount, reduce }: { count: number; scrapeCount: number; reduce: boolean }) {
   return (
     <div className="flex flex-col gap-4">
-      <PhaseHeader icon={Sparkles} title="Drafting with Claude" meta="compose automation" />
+      <PhaseHeader icon={Sparkles} title="Drafting with Claude" meta="grounded in the sector KB" />
 
       <div className="flex items-end justify-between gap-4">
         <div>
@@ -1094,8 +1100,8 @@ function DraftingPanel({ count, scrapeCount, reduce }: { count: number; scrapeCo
         <Sparkles className="h-3.5 w-3.5 text-primary" aria-hidden />
         <span className="truncate">
           {scrapeCount > 0
-            ? `Scraping ${scrapeCount.toLocaleString("en-US")} website${scrapeCount === 1 ? "" : "s"} for emails · Claude writes one email per lead`
-            : "Claude writes one email per lead, tailored to its category"}
+            ? `Claude writes one grounded email per lead · ${scrapeCount.toLocaleString("en-US")} need an address you'll add in review`
+            : "Claude writes one grounded email per lead, tailored to its sector"}
         </span>
       </div>
     </div>
@@ -1155,7 +1161,7 @@ function DraftsReviewPanel({
   drafts: ComposeDraft[];
   approved: Set<string>;
   index: number;
-  info: { mode: "live" | "demo"; saved: number } | null;
+  info: { mode: "live" | "demo"; saved: number; drafted: number } | null;
   campaignTag: string;
   onIndex: (i: number) => void;
   onToggle: (id: string) => void;
@@ -1184,7 +1190,7 @@ function DraftsReviewPanel({
         <PhaseHeader
           icon={Sparkles}
           title="Review AI drafts"
-          meta={`${approvedCount.toLocaleString("en-US")} of ${drafts.length.toLocaleString("en-US")} selected to send${info?.mode === "demo" ? " · demo drafts" : ""}`}
+          meta={`${approvedCount.toLocaleString("en-US")} of ${drafts.length.toLocaleString("en-US")} selected to send${info?.mode === "demo" ? " · demo drafts" : info && info.drafted < drafts.length ? ` · ${info.drafted.toLocaleString("en-US")} AI-written` : ""}`}
         />
         <div className="flex items-center gap-2">
           <button
@@ -1306,7 +1312,11 @@ function DraftsReviewPanel({
 
             <Field
               label="To"
-              hint={`${current.emails.length.toLocaleString("en-US")} address${current.emails.length === 1 ? "" : "es"} found · max 10`}
+              hint={
+                current.emails.length > 0
+                  ? `${current.emails.length.toLocaleString("en-US")} address${current.emails.length === 1 ? "" : "es"} on file · max 10`
+                  : "no stored address — type one to reach this lead"
+              }
             >
               {current.emails.length > 0 ? (
                 <select
@@ -1322,9 +1332,17 @@ function DraftsReviewPanel({
                   ))}
                 </select>
               ) : (
-                <div className="flex h-8 items-center rounded-lg border border-destructive/40 bg-destructive/5 px-2.5 font-mono text-xs text-destructive">
-                  no address — this lead can&apos;t be mailed
-                </div>
+                <input
+                  type="email"
+                  value={current.best_email ?? ""}
+                  onChange={(e) => onEdit(current.id, { best_email: e.target.value.trim() })}
+                  placeholder="name@business.com"
+                  data-track="campaign_draft_to_manual"
+                  className={cn(
+                    "h-8 w-full rounded-lg border bg-background px-2.5 font-mono text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    draftSendable(current) ? "border-border" : "border-destructive/40",
+                  )}
+                />
               )}
             </Field>
             <Field label="Subject">
@@ -1421,7 +1439,7 @@ function ReviewPanel({
       {!ai && droppedCount > 0 && (
         <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
           {droppedCount.toLocaleString("en-US")} selected lead{droppedCount === 1 ? "" : "s"} without a stored email{" "}
-          {droppedCount === 1 ? "is" : "are"} skipped — compose {MAX_COMPOSE_LEADS} or fewer to scrape their sites.
+          {droppedCount === 1 ? "is" : "are"} skipped — draft with AI ({MAX_COMPOSE_LEADS} or fewer) to add an address in review.
         </p>
       )}
 

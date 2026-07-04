@@ -55,11 +55,13 @@ export const SETTING_COMPOSE_WEBHOOK = "n8n_compose_webhook_url";
 export const SETTING_COMPOSE_ENABLED = "n8n_compose_webhook_enabled";
 
 /** app_settings key holding the Sector Playbooks config (JSON): per-sector
- *  category keywords + the attachment PDF's storage object. Managed from the
- *  Sector Playbooks tab; read by the send flow to attach the right PDF. */
+ *  category keywords + the uploaded KB markdown. Managed from the Sector
+ *  Playbooks tab; read by the compose flow to ground the email per sector. */
 export const SETTING_SECTOR_PLAYBOOKS = "sector_playbooks";
 
-/** Public Storage bucket holding the compressed sector portfolio PDFs. */
+/** Public Storage bucket holding the per-sector attachment PDFs (managed from
+ *  the Sector Playbooks tab; the send flow attaches them by public URL, which
+ *  the n8n Gmail node downloads). */
 export const SECTOR_ASSETS_BUCKET = "sector-assets";
 
 /** Resolve the n8n campaign-send webhook. A URL saved from the Integrations tab
@@ -189,11 +191,7 @@ export async function deleteSetting(key: string): Promise<"ok" | "demo" | "error
   }
 }
 
-/* ───────────────────────────  Supabase Storage  ─────────────────────────────
- * The Sector Playbooks tab uploads compressed portfolio PDFs to a public bucket
- * (see supabase/schema.sql); the send flow attaches them by public URL. Writes
- * use the service role (bypasses storage RLS); reads are public.
- */
+/* ─────────────────────────  Storage (sector PDFs)  ───────────────────────── */
 
 /** Encode each path segment but keep the slashes. */
 function encodeObjectPath(path: string): string {

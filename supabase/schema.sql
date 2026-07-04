@@ -50,13 +50,16 @@ create table if not exists public.app_settings (
   updated_at timestamptz not null default now()
 );
 
+-- Note: the Sector Playbooks per-category mapping (KB markdown + PDF metadata)
+-- is stored in app_settings under key "sector_playbooks". The KB markdown is
+-- inline; the attachment PDF bytes live in the sector-assets Storage bucket
+-- below.
+
 -- ── sector-assets storage bucket ─────────────────────────────────────────────
 -- Public bucket holding the compressed sector portfolio PDFs the Send Campaigns
 -- flow attaches to outreach emails (managed from the Sector Playbooks tab).
 -- Public-read so the n8n send workflow can fetch each PDF by URL and attach it;
 -- writes are server-side only (service role, app/api/sector-playbooks/pdf).
--- The per-category mapping itself lives in app_settings under key
--- "sector_playbooks".
 insert into storage.buckets (id, name, public)
 values ('sector-assets', 'sector-assets', true)
 on conflict (id) do update set public = true;

@@ -1,13 +1,28 @@
 // Sector Playbooks — per-sector config that maps a lead's free-text CSV Category
-// to a sector, its attachment PDF (stored in the `sector-assets` Storage bucket),
-// and its knowledge-base doc (components/knowledgebase/<slug>.md). Pure and
-// framework-free so the client page (SectorPlaybooksPage) and the server routes
-// (api/sector-playbooks, campaigns/send) share the same types + matching logic.
+// to a sector and its knowledge-base markdown. The KB grounds the AI outreach
+// email. Pure and framework-free so the client page (SectorPlaybooksPage) and
+// the server routes (api/sector-playbooks, campaigns/compose) share the same
+// types + matching logic.
 //
-// Persisted as JSON in app_settings under SETTING_SECTOR_PLAYBOOKS. The PDF
-// bytes live in Storage; only the object path + metadata are stored here.
+// Persisted as JSON in app_settings under SETTING_SECTOR_PLAYBOOKS. An uploaded
+// KB markdown (kb.content) is stored inline and overrides the repo file
+// (components/knowledgebase/<slug>.md); with no upload the repo file is used.
 
-/** The attachment PDF for a sector (object in the sector-assets bucket). */
+/** Uploaded knowledge-base markdown for a sector. When present it overrides the
+ *  repo file (components/knowledgebase/<slug>.md) as the KB grounding the email. */
+export interface SectorKb {
+  /** uploaded filename, shown in the UI */
+  name: string;
+  size: number;
+  uploadedAt: string;
+  /** the markdown content */
+  content: string;
+}
+
+/** The attachment PDF for a sector (an object in the `sector-assets` Storage
+ *  bucket). Separate from the KB markdown: the KB grounds the email copy; the
+ *  PDF rides along as the outgoing email's attachment (matched by Category and
+ *  attached by the n8n Gmail node). */
 export interface SectorPdf {
   /** object path within the sector-assets bucket, e.g. "aged-care.pdf" */
   path: string;
@@ -18,13 +33,15 @@ export interface SectorPdf {
 }
 
 export interface SectorPlaybook {
-  /** stable id — also the KB filename base and the Storage path base */
+  /** stable id — also the repo KB filename base (components/knowledgebase/<slug>.md) */
   slug: string;
   /** display name */
   name: string;
   /** lowercased keyword fragments matched against a lead's free-text Category */
   categories: string[];
-  /** attachment PDF, or null when none uploaded yet */
+  /** uploaded KB markdown that overrides the repo file, or null to use the repo file */
+  kb: SectorKb | null;
+  /** attachment PDF (Storage), or null when none uploaded — attached per Category on send */
   pdf: SectorPdf | null;
 }
 
@@ -41,6 +58,7 @@ export const DEFAULT_PLAYBOOKS: readonly SectorPlaybook[] = [
       "retirement village", "health", "healthcare", "hospital", "medical centre",
       "disability", "ndis",
     ],
+    kb: null,
     pdf: null,
   },
   {
@@ -51,6 +69,7 @@ export const DEFAULT_PLAYBOOKS: readonly SectorPlaybook[] = [
       "day care", "daycare", "kindergarten", "kindy", "preschool", "pre-school",
       "nursery", "oshc", "long day care",
     ],
+    kb: null,
     pdf: null,
   },
   {
@@ -60,6 +79,7 @@ export const DEFAULT_PLAYBOOKS: readonly SectorPlaybook[] = [
       "education", "school", "primary school", "secondary school", "high school",
       "college", "university", "campus", "tafe", "academy", "grammar",
     ],
+    kb: null,
     pdf: null,
   },
 ];
@@ -100,6 +120,8 @@ export function resolveSectorForCategory(
 const MAX_CATEGORIES = 40;
 const MAX_KEYWORD_LEN = 60;
 const MAX_NAME_LEN = 80;
+/** Cap on stored KB markdown (matches the upload route's limit). */
+export const MAX_KB_CONTENT = 200_000;
 
 /** Defensively coerce one stored/posted entry into a clean SectorPlaybook,
  *  keyed to a known default (so slug + identity can't be spoofed/renamed). */
@@ -123,6 +145,21 @@ function sanitizeOne(base: SectorPlaybook, raw: unknown): SectorPlaybook {
       ].slice(0, MAX_CATEGORIES)
     : [...base.categories];
 
+  let kb: SectorKb | null = null;
+  const k = o.kb;
+  if (k && typeof k === "object") {
+    const ko = k as Record<string, unknown>;
+    const content = typeof ko.content === "string" ? ko.content : "";
+    if (content.trim()) {
+      kb = {
+        name: (typeof ko.name === "string" && ko.name.trim() ? ko.name.trim() : `${base.slug}.md`).slice(0, 200),
+        size: typeof ko.size === "number" && ko.size >= 0 ? ko.size : content.length,
+        uploadedAt: typeof ko.uploadedAt === "string" && ko.uploadedAt ? ko.uploadedAt : "",
+        content: content.slice(0, MAX_KB_CONTENT),
+      };
+    }
+  }
+
   let pdf: SectorPdf | null = null;
   const p = o.pdf;
   if (p && typeof p === "object") {
@@ -134,13 +171,12 @@ function sanitizeOne(base: SectorPlaybook, raw: unknown): SectorPlaybook {
         path: path.slice(0, 200),
         name: pname.slice(0, 200),
         size: typeof po.size === "number" && po.size >= 0 ? po.size : 0,
-        uploadedAt:
-          typeof po.uploadedAt === "string" && po.uploadedAt ? po.uploadedAt : "",
+        uploadedAt: typeof po.uploadedAt === "string" && po.uploadedAt ? po.uploadedAt : "",
       };
     }
   }
 
-  return { slug: base.slug, name, categories: categories.length ? categories : [...base.categories], pdf };
+  return { slug: base.slug, name, categories: categories.length ? categories : [...base.categories], kb, pdf };
 }
 
 /**

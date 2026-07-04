@@ -1,5 +1,4 @@
 import {
-  bestEmail,
   demoDraft,
   ensureLinkToken,
   isEmail,
@@ -8,37 +7,33 @@ import {
   safeCampaignTag,
   type ComposeDraft,
   type ComposeLeadInput,
-  type DraftEmailSource,
 } from "@/lib/pipeline/campaign";
-import { composeWebhook, isUuid, sameOrigin, supabaseTarget, webhookAuthHeaders } from "@/lib/pipeline/server";
+import { isUuid, sameOrigin } from "@/lib/pipeline/server";
 import { buildComposeKb, loadPlaybooks } from "@/lib/pipeline/sectorStore";
+import { draftEmail } from "@/lib/ai/composeEmail";
 
-// "Compose email" bridge: hands the selected leads to the n8n compose
-// automation (references/Compose Email Automation.json), which extracts up to
-// 10 emails per lead (CSV first, contact-us page scrape as the fallback) and
-// has Claude draft a per-lead subject + HTML body tailored to the CSV Category.
-// Freshly scraped emails are persisted back onto public.leads so the lead is
-// emailable from then on. Runs on Node.
+// "Compose email": drafts a per-lead cold email in-app with the Claude API
+// (lib/ai/composeEmail.ts), grounded in the sector knowledge base for the
+// lead's CSV Category (general company file + the matched sector markdown; see
+// lib/pipeline/sectorStore.ts). The CTA keeps the literal {{link}} token — the
+// send route substitutes the tracked /t/<lead>?c= URL per recipient. Recipients
+// come from the lead's stored (CSV) addresses; a lead can be hand-addressed in
+// the review UI. Runs on Node.
 //
-// Delivery: when N8N_COMPOSE_WEBHOOK_URL is set we POST { campaign, leads } and
-// wait for { ok, results }; otherwise drafts are simulated (demo mode),
-// mirroring the importer and the send route.
+// Delivery: with ANTHROPIC_API_KEY set, each lead is drafted live by Claude and
+// falls back to the deterministic template (campaign.ts demoDraft) on any miss;
+// with no key we return the template for every lead (demo mode) so the review
+// UI is fully exercisable.
 //
 // SECURITY — TODO before exposing publicly: same-origin (CSRF) floor only, NOT
 // real auth; enforce the `campaigns.send` permission here too once auth lands.
 export const runtime = "nodejs";
-// n8n drafts leads one at a time (two page fetches + a Claude call each), so the
-// run can be slow; give serverless deploys the platform max.
+// Leads are drafted sequentially (one Claude call each) so a large batch can be
+// slow; give serverless deploys the platform max.
 export const maxDuration = 300;
 
 const MAX_SUBJECT = 300;
 const MAX_HTML = 20_000;
-// Scale the client's patience to the batch size (n8n has no execution cap),
-// bounded to the serverless maxDuration so we don't wait past when the function
-// would be killed anyway.
-function composeTimeoutMs(leadCount: number): number {
-  return Math.min(300_000, 45_000 + leadCount * 25_000);
-}
 
 type ComposeMode = "live" | "demo" | "noop";
 
@@ -47,13 +42,15 @@ interface ComposeResult {
   mode: ComposeMode;
   campaign?: string;
   results?: ComposeDraft[];
-  /** leads whose freshly scraped emails were written back to Supabase */
+  /** how many leads Claude actually drafted (the rest are template fallbacks). */
+  drafted?: number;
+  /** retained for the client contract; always 0 now that we no longer scrape. */
   saved?: number;
   error?: string;
 }
 
-/** Whitelist a client lead → the fields the automation needs. Drops anything
- *  without a stable stored id (the Supabase write-back filters by it). */
+/** Whitelist a client lead → the fields the composer needs. Drops anything
+ *  without a stable stored id and a name. */
 function sanitizeLead(input: unknown): ComposeLeadInput | null {
   if (!input || typeof input !== "object") return null;
   const o = input as Record<string, unknown>;
@@ -72,88 +69,24 @@ function sanitizeLead(input: unknown): ComposeLeadInput | null {
   return { id, name, website: str(o.website), category: str(o.category), emails };
 }
 
-/** Whitelist one draft coming back from n8n. `known` maps lead id → the lead we
- *  sent, so the automation can't attach a draft to a lead we never asked about. */
-function sanitizeDraft(input: unknown, known: Map<string, ComposeLeadInput>): ComposeDraft | null {
-  if (!input || typeof input !== "object") return null;
-  const o = input as Record<string, unknown>;
-  const id = typeof o.id === "string" ? o.id.trim() : "";
-  const lead = known.get(id);
-  if (!lead) return null;
-
-  const emails = Array.isArray(o.emails)
-    ? [
-        ...new Set(
-          o.emails
-            .filter((x): x is string => typeof x === "string")
-            .map((x) => x.trim().toLowerCase())
-            .filter(isEmail),
-        ),
-      ].slice(0, MAX_DRAFT_EMAILS)
-    : [];
-
-  const rawSource = typeof o.email_source === "string" ? o.email_source : "";
-  const email_source: DraftEmailSource =
-    rawSource === "csv" || rawSource === "scraped" ? rawSource : "none";
-
-  const rawBest = typeof o.best_email === "string" ? o.best_email.trim().toLowerCase() : "";
-  const best_email = emails.includes(rawBest) ? rawBest : bestEmail(emails);
-
-  const subject = (typeof o.subject === "string" ? o.subject.trim() : "").slice(0, MAX_SUBJECT);
-  const rawHtml = (typeof o.html === "string" ? o.html.trim() : "").slice(0, MAX_HTML);
-
-  // a draft with no copy at all is useless — fall back to the demo template
-  if (!subject || !rawHtml) {
-    const fallback = demoDraft(lead);
-    return { ...fallback, emails, email_source, best_email };
-  }
-
-  return {
-    id,
-    business: lead.name,
-    category: typeof o.category === "string" && o.category.trim() ? o.category.trim() : lead.category ?? null,
-    url: lead.website ?? null,
-    emails,
-    email_source,
-    best_email,
-    subject,
-    html: ensureLinkToken(rawHtml),
-  };
-}
-
-/** Persist scraped emails back onto public.leads (best-effort — a failed write
- *  never fails the compose). Returns how many leads were updated. */
-async function persistScrapedEmails(drafts: ComposeDraft[]): Promise<number> {
-  const target = supabaseTarget();
-  if (target.state !== "ok") return 0;
-  const toSave = drafts.filter((d) => d.email_source === "scraped" && d.emails.length > 0);
-  let saved = 0;
-  for (const d of toSave) {
-    if (!isUuid(d.id)) continue;
-    try {
-      // return=representation + select=id so a zero-row match (lead deleted
-      // mid-compose) doesn't inflate the saved count on a 204.
-      const res = await fetch(`${target.base}/rest/v1/leads?id=eq.${d.id}&select=id`, {
-        method: "PATCH",
-        headers: {
-          apikey: target.key,
-          Authorization: `Bearer ${target.key}`,
-          "Content-Type": "application/json",
-          Prefer: "return=representation",
-        },
-        body: JSON.stringify({ emails: d.emails }),
-      });
-      if (res.ok) {
-        const rows = (await res.json().catch(() => [])) as unknown[];
-        if (Array.isArray(rows) && rows.length > 0) saved++;
-      } else {
-        console.error(`[pipeline/compose] Supabase PATCH ${res.status} for lead ${d.id}`);
-      }
-    } catch (e) {
-      console.error(`[pipeline/compose] persisting emails for lead ${d.id} failed:`, e);
-    }
-  }
-  return saved;
+/** Build a lead's reviewable draft: the deterministic template supplies the
+ *  address fields (emails / email_source / best_email) and the fallback copy;
+ *  a successful Claude draft overrides the subject + HTML. The CTA {{link}}
+ *  token is guaranteed either way. */
+async function draftForLead(
+  lead: ComposeLeadInput,
+  kb: string,
+): Promise<{ draft: ComposeDraft; ai: boolean }> {
+  const base = demoDraft(lead);
+  const drafted = await draftEmail(
+    { business: lead.name, category: lead.category, website: lead.website },
+    kb,
+  );
+  if (!drafted) return { draft: base, ai: false };
+  const subject = drafted.subject.slice(0, MAX_SUBJECT);
+  const html = drafted.html.slice(0, MAX_HTML);
+  if (!subject || !html) return { draft: base, ai: false };
+  return { draft: { ...base, subject, html: ensureLinkToken(html) }, ai: true };
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -190,62 +123,42 @@ export async function POST(req: Request): Promise<Response> {
     return json({ ok: false, mode: "noop", error: "No valid stored leads to compose for." }, 400);
   }
 
-  const target = await composeWebhook();
-  if (target.state === "demo") {
-    // Demo mode — no webhook configured. Simulate per-lead drafts so the
-    // review UI is fully exercisable before n8n is wired up.
+  // No API key → deterministic template for every lead (demo mode). Still fully
+  // reviewable and sendable; just not AI-written.
+  if (!process.env.ANTHROPIC_API_KEY) {
     return json({ ok: true, mode: "demo", campaign, results: leads.map(demoDraft), saved: 0 });
   }
 
-  // Attach each lead's knowledge base (general company file + the file for the
-  // sector its Category resolves to) so the automation drafts a grounded,
-  // property-maintenance email tailored to the sector — never a generic
-  // lead-generation pitch. See lib/pipeline/sectorStore.ts / components/knowledgebase.
+  // Ground each draft in the sector KB for its Category (general company file +
+  // the matched sector markdown; uploaded KB in Supabase wins over the repo
+  // file). Draft sequentially so a batch of same-sector leads reuses the cached
+  // KB system prefix instead of paying a cold cache write per lead.
   const playbooks = await loadPlaybooks();
-  const leadsForN8n = await Promise.all(
-    leads.map(async (l) => ({ ...l, kb: await buildComposeKb(l.category, playbooks) })),
-  );
+  // Memoize the KB per Category so the general company file isn't re-read from
+  // disk once per lead, and same-Category leads get a byte-identical (and thus
+  // cacheable) system prefix.
+  const kbByCategory = new Map<string, string>();
+  const kbFor = async (category: string | null | undefined): Promise<string> => {
+    const key = (category ?? "").toLowerCase().trim();
+    const hit = kbByCategory.get(key);
+    if (hit !== undefined) return hit;
+    const kb = await buildComposeKb(category, playbooks);
+    kbByCategory.set(key, kb);
+    return kb;
+  };
 
-  let res: Response;
-  try {
-    res = await fetch(target.url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...webhookAuthHeaders() },
-      body: JSON.stringify({ campaign, leads: leadsForN8n }),
-      signal: AbortSignal.timeout(composeTimeoutMs(leads.length)),
-    });
-  } catch (e) {
-    console.error("[pipeline/compose] fetch to n8n webhook failed:", e);
-    return json({ ok: false, mode: "live", error: "Could not reach the compose automation." }, 502);
-  }
-
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    console.error(`[pipeline/compose] n8n webhook ${res.status}:`, detail.slice(0, 1000));
-    return json({ ok: false, mode: "live", error: "The compose automation rejected the request." }, 502);
-  }
-
-  const data = (await res.json().catch(() => null)) as { results?: unknown } | null;
-  if (!data || !Array.isArray(data.results)) {
-    return json({ ok: false, mode: "live", error: "The compose automation returned an unexpected response." }, 502);
-  }
-
-  const known = new Map(leads.map((l) => [l.id, l]));
-  const seen = new Set<string>();
   const results: ComposeDraft[] = [];
-  for (const raw of data.results) {
-    const draft = sanitizeDraft(raw, known);
-    if (!draft || seen.has(draft.id)) continue;
-    seen.add(draft.id);
-    results.push(draft);
-  }
-  // any lead the automation dropped still gets a reviewable fallback draft
+  let drafted = 0;
   for (const lead of leads) {
-    if (!seen.has(lead.id)) results.push(demoDraft(lead));
+    const { draft, ai } = await draftForLead(lead, await kbFor(lead.category));
+    results.push(draft);
+    if (ai) drafted += 1;
   }
 
-  const saved = await persistScrapedEmails(results);
-  return json({ ok: true, mode: "live", campaign, results, saved });
+  // Key set but every draft fell back to the template (bad key, outage, all
+  // refusals) → report demo, so the UI flags "demo drafts" instead of passing
+  // identical template copy off as per-lead AI writing.
+  return json({ ok: true, mode: drafted > 0 ? "live" : "demo", campaign, results, drafted, saved: 0 });
 }
 
 function json(result: ComposeResult, status = 200): Response {

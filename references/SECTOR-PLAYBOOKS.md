@@ -1,11 +1,10 @@
-# Sector Playbooks — per-category PDF + knowledge base
+# Sector Playbooks — per-category knowledge base
 
-Routes each lead to a **sector** by its CSV `Category`, then:
-
-- **attaches** that sector's portfolio **PDF** to its outreach email, and
-- **grounds** the AI-written copy in that sector's **knowledge base** (`components/knowledgebase/<slug>.md`).
-
-Configured from the **Sector Playbooks** tab (Automate group, admin-only — `playbooks.view` / `playbooks.manage`).
+Routes each lead to a **sector** by its CSV `Category`, then **grounds** the
+AI-written outreach email in that sector's **knowledge base** (a Markdown file).
+Configured from the **Sector Playbooks** tab (Automate group, admin-only —
+`playbooks.view` / `playbooks.manage`). There is no email attachment — the KB
+shapes the email copy at compose time.
 
 ## Sectors (defaults)
 
@@ -15,48 +14,55 @@ Configured from the **Sector Playbooks** tab (Automate group, admin-only — `pl
 | `early-childhood` | Early Childhood / Early Learning | childcare, early learning, kindergarten, daycare | `early-childhood.md` |
 | `education` | Education / Schools | school, college, university, tafe | `education.md` |
 
-Category keywords are editable per sector in the tab. Matching is case-insensitive substring, **longest keyword wins** (so "primary school" → Education, "aged care" beats a stray "care"). No match → the email sends with no attachment.
+Category keywords are editable per sector in the tab. Matching is case-insensitive
+substring, **longest keyword wins**. No match → the email is grounded by the
+general company file only.
+
+## Knowledge base per sector
+
+Each sector's KB is a Markdown file. The **built-in** file ships in the repo at
+`components/knowledgebase/<slug>.md`. From the tab you can **upload a `.md`** to
+override it (stored in Supabase, used instead of the repo file) or **revert** to
+the built-in. The general company file **`components/knowledgebase/business.md`**
+is always prepended — it carries the critical framing (APMG does *property
+maintenance for* these facilities; it is **not** a lead-gen agency).
+
+Effective KB for a lead = `business.md` (repo) + the matched sector's KB
+(uploaded override, else repo file).
 
 ## Where things live
 
-- **Config mapping** → `app_settings["sector_playbooks"]` (JSON: `{ slug, name, categories[], pdf }`). Defaults from `lib/pipeline/sectors.ts` fill any unset field.
-- **PDFs** → public Supabase Storage bucket **`sector-assets`** at `<slug>.pdf`. Uploaded from the tab (or the seed script). Public-read so n8n can fetch them.
-- **KB markdown** → `components/knowledgebase/<slug>.md` (repo files, source of truth; shown read-only in the tab).
+- **Config mapping + uploaded KB** → `app_settings["sector_playbooks"]` (JSON:
+  `{ slug, name, categories[], kb }`, where `kb` holds the uploaded markdown
+  `content` + metadata, or is null to use the repo file). Defaults from
+  `lib/pipeline/sectors.ts` fill any unset field.
+- **Built-in KB markdown** → `components/knowledgebase/<slug>.md` + `business.md`.
+- **No storage bucket, no attachment** — the KB is text stored in `app_settings`.
 
 ## Code map
 
-- `lib/pipeline/sectors.ts` — pure model + `resolveSectorForCategory()` + defaults (shared client/server).
-- `lib/pipeline/sectorStore.ts` — server load/save + PDF public URL.
-- `lib/pipeline/server.ts` — Storage helpers (`uploadObject`/`deleteObject`/`publicObjectUrl`) + `SECTOR_ASSETS_BUCKET`.
-- `app/api/sector-playbooks/route.ts` — GET config + POST (name/categories).
-- `app/api/sector-playbooks/pdf/route.ts` — POST upload / DELETE remove PDF.
+- `lib/pipeline/sectors.ts` — pure model + `resolveSectorForCategory()` + defaults + `SectorKb`.
+- `lib/pipeline/sectorStore.ts` — `loadPlaybooks`/`savePlaybooks`, `effectiveSectorKb` (uploaded→repo), `buildComposeKb`.
+- `app/api/sector-playbooks/route.ts` — GET config (+ effective KB status) / POST (name, categories).
+- `app/api/sector-playbooks/kb/route.ts` — POST upload `.md` / DELETE revert.
 - `components/apmg/SectorPlaybooksPage.tsx` — the tab.
-- `app/api/pipeline/campaigns/send/route.ts` — resolves each recipient's Category → attaches `attachment: { url, filename }` per message.
-- `references/Campaign Send Automation.json` — n8n webhook send workflow: downloads `attachment.url` and attaches it via Gmail.
+- `app/api/pipeline/campaigns/compose/route.ts` — attaches the KB to each lead sent to the n8n compose automation.
+- `references/Compose Email Automation.json` — n8n compose: injects the KB, drafts a property-maintenance email per sector.
 
-## The email path (attachments happen at SEND, not compose)
+## The email path
 
-1. **Compose** (`Compose Email Automation.json`) only drafts subject/html.
-2. **Send** — the tab POSTs to `app/api/pipeline/campaigns/send`, which resolves each lead's Category → sector → PDF public URL and adds `attachment` to each message.
-3. The **send webhook** (`Campaign Send Automation.json`) downloads the PDF and attaches it on the Gmail node. No attachment field → sends plain.
+1. **Compose** — the compose route resolves each lead's Category → sector, builds
+   the KB (`business.md` + sector KB), and passes it to the n8n compose automation,
+   which drafts a grounded, property-maintenance email per sector.
+2. **Send** — the campaign-send workflow (`Campaign Send Automation.json`) just
+   delivers each email via Gmail (no attachment).
 
 ## Setup
 
-1. **Compress the source PDFs** (40 MB scans → ~2.7 MB emailable) into `references/portfolios/`:
-   ```bash
-   python - <<'PY'
-   import fitz, os
-   for name, slug in {"Aged Care":"aged-care","Early":"early-childhood","Education":"education"}.items():
-       doc = fitz.open(f"references/{name}.pdf"); out = fitz.open()
-       mat = fitz.Matrix(150/72, 150/72)
-       for p in doc:
-           out.new_page(width=p.rect.width, height=p.rect.height).insert_image(p.rect, stream=p.get_pixmap(matrix=mat).tobytes("jpeg", jpg_quality=75))
-       out.save(f"references/portfolios/{slug}.pdf", deflate=True, garbage=4)
-   PY
-   ```
-   (Requires `pip install pymupdf`. The compressed copies are committed; the 40 MB originals are gitignored.)
-2. **Run `supabase/schema.sql`** in the Supabase SQL editor — creates the `sector-assets` bucket + public-read policy (and `app_settings` if not present).
-3. **Seed the PDFs** (uploads the compressed copies + writes the mapping): `npm run seed:pdfs`. Or upload each from the Sector Playbooks tab.
-4. **Wire the send webhook**: import `references/Campaign Send Automation.json` into n8n, set its Gmail credential, activate, and set its Production URL as `N8N_CAMPAIGN_WEBHOOK_URL` (or the Integrations campaign webhook). Add a Header Auth credential (`x-apmg-secret` = `N8N_WEBHOOK_SECRET`).
+1. **Run `supabase/schema.sql`** — creates `app_settings` (used to persist config
+   and any uploaded KB). No storage bucket needed.
+2. That's it — sectors ground emails from the built-in `components/knowledgebase/*.md`
+   out of the box. To customize a sector's copy without touching the repo, open the
+   Sector Playbooks tab and **Upload .md**.
 
-Max upload is 15 MB per PDF (kept under Gmail's 25 MB cap after base64 inflation).
+Max uploaded KB is ~200k characters per sector.

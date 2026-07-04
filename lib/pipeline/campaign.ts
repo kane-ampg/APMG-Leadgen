@@ -104,21 +104,21 @@ export function renderSubject(template: string, vars: { business?: string | null
 }
 
 /* ────────────────────────  AI compose (per-lead drafts)  ───────────────────────
- * The "Compose email" action hands the selected leads to the n8n compose
- * automation (references/Compose Email Automation.json): it extracts up to 10
- * emails per lead (CSV first, contact-page scrape as the fallback) and has
- * Claude draft a subject + HTML body tailored to the lead's CSV Category.
- * Drafts keep the {{link}} token — the send route substitutes the tracked URL.
+ * The "Compose email" action drafts a per-lead subject + HTML body in-app with
+ * the Claude API (lib/ai/composeEmail.ts, via app/api/pipeline/campaigns/compose),
+ * grounded in the sector knowledge base for the lead's CSV Category. Addresses
+ * come from the lead's stored emails. Drafts keep the {{link}} token — the send
+ * route substitutes the tracked URL per recipient.
  */
 
-/** Hard cap on leads per compose run — each lead costs up to two page fetches
- *  plus a Claude call, and the webhook responds synchronously. */
+/** Hard cap on leads per compose run — each lead costs one Claude call and the
+ *  route drafts them sequentially, responding synchronously. */
 export const MAX_COMPOSE_LEADS = 10;
 
-/** Max addresses the automation may attach to one lead. */
+/** Max stored addresses shown for one lead in the review UI. */
 export const MAX_DRAFT_EMAILS = 10;
 
-/** A lead as handed to the compose automation. */
+/** A lead as handed to the composer. */
 export interface ComposeLeadInput {
   id: string;
   name: string;
@@ -130,7 +130,7 @@ export interface ComposeLeadInput {
 /** Where a draft's addresses came from. */
 export type DraftEmailSource = "csv" | "scraped" | "none";
 
-/** One per-lead draft returned by the automation (or simulated in demo mode). */
+/** One per-lead draft (Claude-written, or the deterministic template fallback). */
 export interface ComposeDraft {
   id: string;
   business: string;
@@ -151,9 +151,10 @@ export function ensureLinkToken(html: string): string {
   return `${html}\n<p><a href="{{link}}">See how it works &rarr;</a></p>`;
 }
 
-/** Simulated draft used when N8N_COMPOSE_WEBHOOK_URL is unset (demo mode) —
- *  mirrors the shape and rules of the live automation (tailored opening
- *  paragraph, {{link}} CTA, APMG sign-off) so the review UI is exercisable. */
+/** Deterministic per-lead draft used as the fallback (no ANTHROPIC_API_KEY, or
+ *  a Claude miss) and as the base the composer overrides — mirrors the composer's
+ *  shape and rules (tailored opening paragraph, {{link}} CTA, APMG sign-off) so
+ *  the review UI is always exercisable. */
 export function demoDraft(lead: ComposeLeadInput): ComposeDraft {
   const emails = (lead.emails ?? []).map((e) => e.trim().toLowerCase()).filter(isEmail).slice(0, MAX_DRAFT_EMAILS);
   const category = (lead.category ?? "").trim() || null;

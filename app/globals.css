@@ -107,8 +107,20 @@
   body {
     background-color: hsl(var(--background));
     color: hsl(var(--foreground));
+    font-size: 1.0625rem; /* a little bigger base (17px); text-* utilities still win */
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+  }
+
+  /* Headings use the second typeface (Plus Jakarta Sans). An explicit `font-*`
+     utility on an element still overrides this (utilities layer beats base). */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-family: var(--font-heading), ui-sans-serif, system-ui, sans-serif;
   }
 
   ::selection {

@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## APMG — Send Campaign (with sector PDF attachment)\n\n**Trigger:** the dashboard's Pipeline → Send Campaigns tab POSTs the rendered outreach messages here when you confirm a send (app route: app/api/pipeline/campaigns/send).\n\n**Setup (once):**\n1. Open both **Gmail** nodes and select your Gmail (OAuth2) credential.\n2. RECOMMENDED — open the **Send Webhook** node → Authentication → **Header Auth**, create a header credential with name `x-apmg-secret` and a random value, then set that same value as `N8N_WEBHOOK_SECRET` in the app's env (the send route sends it automatically). This webhook sends real email, so leaving it open lets anyone who finds the URL send on your behalf.\n3. Activate the workflow, copy the **Production URL** from the Webhook node.\n4. Set it as `N8N_CAMPAIGN_WEBHOOK_URL` in the app's `.env.local` (or the Integrations tab's campaign webhook) and restart the app.\n\n**What it does per message:**\n- If the message carries `attachment.url` (the app resolves the lead's Category → a Sector Playbook and passes the sector PDF's public URL), it downloads that PDF and attaches it to the email.\n- Otherwise it sends the email with no attachment.\n- The CTA link is already rewritten per lead to /t/<lead>?c=<campaign> by the app.\n\n**Request body:** `{ campaign, messages: [{ to, leadId, subject, html, attachment?: { url, filename } }] }`\n**Response:** `{ ok: true, sent }`\n\nSee also references/Sector Playbooks — the tab that maps Category → PDF (Supabase Storage, public bucket `sector-assets`).",
+        "content": "## APMG — Send Campaign (with sector PDF attachment)\n\n**Trigger:** the dashboard's Pipeline → Send Campaigns tab POSTs the rendered outreach messages here when you confirm a send (app route: app/api/pipeline/campaigns/send).\n\n**Setup (once):**\n1. Open both **Gmail** nodes and select your Gmail (OAuth2) credential.\n2. RECOMMENDED — open the **Send Webhook** node → Authentication → **Header Auth**, create a header credential with name `x-apmg-secret` and a random value, then set that same value as `N8N_WEBHOOK_SECRET` in the app's env (the send route sends it automatically). This webhook sends real email, so leaving it open lets anyone who finds the URL send on your behalf.\n3. Activate the workflow, copy the **Production URL** from the Webhook node.\n4. Set it as `N8N_CAMPAIGN_WEBHOOK_URL` in the app's `.env.local` (or the Integrations tab's campaign webhook) and restart the app.\n\n**What it does per message:**\n- If the message carries `attachment.url` (the app resolves the lead's Category → a Sector Playbook and passes the sector PDF's public URL), it downloads that PDF, renames it to `attachment.filename`, and attaches it to the email.\n- Otherwise — no PDF, OR the download fails/times out — it still sends the email with no attachment (the recipient is never silently dropped).\n- The CTA link is already rewritten per lead to /t/<lead>?c=<campaign> by the app.\n\n**Request body:** `{ campaign, messages: [{ to, leadId, subject, html, attachment?: { url, filename } }] }`\n**Response:** `{ ok: true, sent }`\n\nSee also references/Sector Playbooks — the tab that maps Category → PDF (Supabase Storage, public bucket `sector-assets`).",
         "height": 640,
         "width": 480,
         "color": 4
@@ -87,7 +87,18 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [176, 0],
-      "onError": "continueRegularOutput"
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Give the downloaded PDF the friendly filename the app sent (attachment_name),\n// so the recipient sees e.g. \"APMG Aged Care.pdf\" instead of the storage object name.\nconst item = $input.item;\nconst name = ($('Split Messages').item.json.attachment_name || 'attachment.pdf').toString();\nif (item.binary && item.binary.attachment) {\n  item.binary.attachment.fileName = name;\n  item.binary.attachment.mimeType = 'application/pdf';\n}\nreturn item;"
+      },
+      "id": "s9000000-0000-4000-8000-00000000000a",
+      "name": "Name Attachment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [296, 0]
     },
     {
       "parameters": {
@@ -200,6 +211,24 @@
       ]
     },
     "Download Attachment": {
+      "main": [
+        [
+          {
+            "node": "Name Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Plain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Name Attachment": {
       "main": [
         [
           {

@@ -178,7 +178,7 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert }: S
               </span>
             </div>
             <div className="mt-px truncate font-mono text-[11px] text-muted-foreground">
-              kaner@simple.biz
+              kane@apmgservices.com.au
             </div>
           </div>
           <button

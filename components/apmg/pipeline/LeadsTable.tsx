@@ -2,6 +2,7 @@
 
 import { AlertTriangle, Eye, Inbox, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { bestEmail } from "@/lib/pipeline/campaign";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -101,6 +102,7 @@ export function LeadsTableView({
             <TableHead>Business</TableHead>
             <TableHead>Website</TableHead>
             <TableHead>Phone</TableHead>
+            <TableHead>Email</TableHead>
             <TableHead className="text-right">Rating</TableHead>
             <TableHead className="text-right">Emails</TableHead>
             <TableHead className="text-right">Socials</TableHead>
@@ -110,6 +112,7 @@ export function LeadsTableView({
         <TableBody>
           {rows.map((r, i) => {
             const checked = !!(r.id && selection?.selected.has(r.id));
+            const email = bestEmail(r.emails);
             return (
               <TableRow key={r.id ?? i} className={cn("hover:bg-muted/40", checked && "bg-primary/[0.04]")}>
                 {selectable && (
@@ -150,6 +153,19 @@ export function LeadsTableView({
                 </TableCell>
                 <TableCell className="tnum font-mono text-[12px] text-foreground">
                   {r.phone ?? <Dash />}
+                </TableCell>
+                <TableCell className="max-w-[220px]">
+                  {email ? (
+                    <a
+                      href={`mailto:${email}`}
+                      data-track="lead_email"
+                      className="block truncate font-mono text-[11px] text-primary hover:underline"
+                    >
+                      {email}
+                    </a>
+                  ) : (
+                    <Dash />
+                  )}
                 </TableCell>
                 <TableCell className="tnum text-right font-mono text-[12px] text-foreground">
                   {r.rating != null && r.rating !== "" ? r.rating : <Dash />}

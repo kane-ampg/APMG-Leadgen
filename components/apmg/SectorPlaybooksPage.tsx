@@ -6,9 +6,9 @@ import {
   BookOpen,
   Check,
   ChevronDown,
-  Download,
   FileCheck2,
   FileText,
+  Paperclip,
   Pencil,
   Plus,
   RefreshCw,
@@ -22,26 +22,33 @@ import { Footer } from "./Footer";
 import { Reveal } from "./Reveal";
 
 // Sector Playbooks tab — per-sector config that routes a lead's CSV Category to
-// a sector, the portfolio PDF the send flow attaches, and the knowledge-base doc
-// that grounds the email copy. Reads/writes /api/sector-playbooks (+ /pdf).
+// a sector and its knowledge-base markdown. The KB grounds the AI outreach
+// email. An uploaded .md overrides the repo file (components/knowledgebase/
+// <slug>.md); remove it to fall back to the repo. Reads/writes
+// /api/sector-playbooks (config) and /api/sector-playbooks/kb (the .md upload).
 
+type KbSource = "uploaded" | "repo" | "none";
+interface KbView {
+  source: KbSource;
+  present: boolean;
+  fileName: string;
+  size: number;
+  uploadedAt: string;
+  chars: number;
+  preview: string;
+}
 interface PdfView {
   name: string;
   size: number;
   uploadedAt: string;
   url: string | null;
 }
-interface KbView {
-  present: boolean;
-  chars: number;
-  preview: string;
-}
 interface PlaybookView {
   slug: string;
   name: string;
   categories: string[];
-  pdf: PdfView | null;
   kb: KbView;
+  pdf: PdfView | null;
 }
 
 type LoadState =
@@ -50,12 +57,6 @@ type LoadState =
   | { status: "ready"; mode: string; canPersist: boolean; playbooks: PlaybookView[] };
 
 const POLL_MS = 20000;
-
-function fmtBytes(n: number): string {
-  if (n <= 0) return "—";
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
 
 export function SectorPlaybooksPage() {
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
@@ -102,6 +103,7 @@ export function SectorPlaybooksPage() {
   }, [fetchState]);
 
   const ready = load.status === "ready" ? load : null;
+  const uploaded = ready ? ready.playbooks.filter((p) => p.kb.source === "uploaded").length : 0;
   const withPdf = ready ? ready.playbooks.filter((p) => p.pdf).length : 0;
 
   return (
@@ -116,8 +118,11 @@ export function SectorPlaybooksPage() {
               Sector Playbooks
             </h1>
             <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
-              Each lead is routed to a sector by its <span className="text-foreground/80">Category</span>. The sector&apos;s
-              PDF is attached to its outreach email, and its knowledge base grounds the AI-written copy.
+              Each lead is routed to a sector by its <span className="text-foreground/80">Category</span>. That
+              sector&apos;s knowledge base (a Markdown file) grounds the AI-written outreach email; its{" "}
+              <span className="text-foreground/80">attachment PDF</span> is attached to every matching email by the
+              n8n Gmail node. Upload a <span className="text-foreground/80">.md</span> to override the built-in KB, and
+              a <span className="text-foreground/80">.pdf</span> to attach.
             </p>
           </div>
           <button
@@ -137,7 +142,8 @@ export function SectorPlaybooksPage() {
           <div className="mb-3 flex items-start gap-2.5 rounded-xl border border-border bg-card px-4 py-3 ring-1 ring-foreground/10">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
             <p className="text-[11.5px] leading-relaxed text-muted-foreground">
-              Supabase isn&apos;t connected, so changes here won&apos;t persist and PDFs can&apos;t be uploaded. Run{" "}
+              Supabase isn&apos;t connected, so changes here won&apos;t persist and you can&apos;t upload a KB. The
+              built-in repo files are still used to ground emails. Run{" "}
               <span className="font-mono text-foreground/80">supabase/schema.sql</span> and set the Supabase env vars to
               enable saving.
             </p>
@@ -153,7 +159,12 @@ export function SectorPlaybooksPage() {
             </div>
             <div className="text-[12.5px] text-muted-foreground">
               <span className="font-semibold text-foreground">{ready.playbooks.length}</span> sectors ·{" "}
+              <span className="font-semibold text-foreground">{uploaded}</span> with an uploaded KB ·{" "}
               <span className="font-semibold text-foreground">{withPdf}</span> with an attachment PDF
+            </div>
+            <div className="ml-auto font-mono text-[10.5px] text-muted-foreground/80">
+              general company file{" "}
+              <span className="text-foreground/70">components/knowledgebase/business.md</span> is always included
             </div>
           </div>
         </Reveal>
@@ -213,6 +224,7 @@ function PlaybookCard({
   const [error, setError] = useState<string | null>(null);
   const [showKb, setShowKb] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const pdfRef = useRef<HTMLInputElement>(null);
 
   // Reset local edit buffers if the upstream data changes while not editing.
   useEffect(() => {
@@ -252,8 +264,58 @@ function PlaybookCard({
     }
   }
 
+  async function uploadKb(file: File) {
+    setError(null);
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("slug", playbook.slug);
+      fd.append("file", file);
+      const res = await fetch("/api/sector-playbooks/kb", { method: "POST", body: fd });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) {
+        setError(data?.error ?? `Upload failed (${res.status}).`);
+        return;
+      }
+      onChanged();
+    } catch {
+      setError("Network error uploading the Markdown.");
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
+  }
+
+  async function removeKb() {
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/sector-playbooks/kb?slug=${encodeURIComponent(playbook.slug)}`, {
+        method: "DELETE",
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) {
+        setError(data?.error ?? `Remove failed (${res.status}).`);
+        return;
+      }
+      onChanged();
+    } catch {
+      setError("Network error removing the Markdown.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function uploadPdf(file: File) {
     setError(null);
+    // Reject oversized files instantly (mirrors the server's 18 MB cap) rather
+    // than streaming a 36–40 MB portfolio only to get a 413 — or an opaque
+    // platform body-size error — at the end.
+    if (file.size > 18 * 1000 * 1000) {
+      setError("PDF is too large (max 18 MB — Gmail's attachment limit; compress it first).");
+      if (pdfRef.current) pdfRef.current.value = "";
+      return;
+    }
     setBusy(true);
     try {
       const fd = new FormData();
@@ -270,7 +332,7 @@ function PlaybookCard({
       setError("Network error uploading the PDF.");
     } finally {
       setBusy(false);
-      if (fileRef.current) fileRef.current.value = "";
+      if (pdfRef.current) pdfRef.current.value = "";
     }
   }
 
@@ -293,6 +355,10 @@ function PlaybookCard({
       setBusy(false);
     }
   }
+
+  const kb = playbook.kb;
+  const uploaded = kb.source === "uploaded";
+  const pdf = playbook.pdf;
 
   return (
     <div className="flex h-full flex-col rounded-xl bg-card p-4 ring-1 ring-foreground/10 transition-shadow hover:ring-foreground/20">
@@ -380,46 +446,129 @@ function PlaybookCard({
         )}
       </div>
 
-      {/* attachment PDF */}
+      {/* knowledge base (uploaded .md overrides the repo file) */}
       <div className="mt-3 rounded-lg border border-border bg-background/40 px-3 py-2.5">
         <div className="flex items-center justify-between gap-2">
           <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-            Attachment PDF
+            Knowledge base
           </span>
-          {playbook.pdf && (
-            <span className="font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground/70">
-              {fmtBytes(playbook.pdf.size)}
-            </span>
-          )}
+          <KbSourceBadge source={kb.source} />
         </div>
-        {playbook.pdf ? (
-          <div className="mt-1.5 flex items-center gap-2">
-            <FileCheck2 className="h-4 w-4 shrink-0 text-primary" aria-hidden />
-            <span className="min-w-0 flex-1 truncate text-[11.5px] text-foreground">{playbook.pdf.name}</span>
-            {playbook.pdf.url && (
-              <a
-                href={playbook.pdf.url}
-                target="_blank"
-                rel="noreferrer"
-                data-track="playbook_pdf_view"
-                className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[10.5px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
-              >
-                <Download className="h-3 w-3" aria-hidden />
-                View
-              </a>
+
+        <div className="mt-1.5 flex items-center gap-2">
+          {kb.source === "none" ? (
+            <FileText className="h-4 w-4 shrink-0 text-destructive" aria-hidden />
+          ) : (
+            <FileCheck2 className={cn("h-4 w-4 shrink-0", uploaded ? "text-primary" : "text-muted-foreground")} aria-hidden />
+          )}
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-foreground">
+            {uploaded ? kb.fileName : kb.source === "repo" ? `${playbook.slug}.md (built-in)` : "No knowledge base"}
+          </span>
+          <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground/70">
+            {kb.present ? `${(kb.chars / 1000).toFixed(1)}k chars` : "missing"}
+          </span>
+        </div>
+
+        {kb.present && (
+          <>
+            <button
+              type="button"
+              onClick={() => setShowKb((s) => !s)}
+              className="mt-1.5 inline-flex items-center gap-1 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+              aria-expanded={showKb}
+              data-track="playbook_kb_toggle"
+            >
+              <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showKb && "rotate-180")} aria-hidden />
+              {showKb ? "Hide" : "Preview"}
+            </button>
+            {showKb && (
+              <pre className="mt-1.5 max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background px-2.5 py-2 font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+                {kb.preview}
+                {kb.chars > kb.preview.length ? "\n…" : ""}
+              </pre>
             )}
-          </div>
-        ) : (
-          <div className="mt-1.5 flex items-center gap-2 text-[11.5px] text-muted-foreground">
-            <FileText className="h-4 w-4 shrink-0" aria-hidden />
-            No PDF attached — outreach for this sector sends without a portfolio attachment.
-          </div>
+          </>
         )}
 
         <input
           ref={fileRef}
           type="file"
-          accept="application/pdf"
+          accept=".md,.markdown,text/markdown,text/plain"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) uploadKb(f);
+          }}
+        />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant={uploaded ? "outline" : "default"}
+            disabled={busy || !canPersist}
+            onClick={() => fileRef.current?.click()}
+            data-track="playbook_kb_upload"
+            className="gap-1.5"
+          >
+            <Upload className="h-3.5 w-3.5" aria-hidden />
+            {uploaded ? "Replace .md" : "Upload .md"}
+          </Button>
+          {uploaded && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy || !canPersist}
+              onClick={removeKb}
+              data-track="playbook_kb_remove"
+              className="gap-1.5 text-muted-foreground"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              Revert to built-in
+            </Button>
+          )}
+        </div>
+        <p className="mt-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+          {uploaded
+            ? "Uploaded Markdown overrides the built-in file. Revert to use components/knowledgebase/" +
+              playbook.slug +
+              ".md again."
+            : "Using the built-in components/knowledgebase/" +
+              playbook.slug +
+              ".md. Upload a .md to override it without touching the repo."}
+        </p>
+      </div>
+
+      {/* attachment PDF — emailed via n8n's Gmail node, matched by Category */}
+      <div className="mt-3 rounded-lg border border-border bg-background/40 px-3 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+            Attachment PDF
+          </span>
+          <span
+            className={cn(
+              "inline-flex items-center rounded-full border bg-transparent px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.08em]",
+              pdf ? "border-primary/40 text-primary" : "border-border text-muted-foreground",
+            )}
+          >
+            {pdf ? "Attached" : "None"}
+          </span>
+        </div>
+
+        <div className="mt-1.5 flex items-center gap-2">
+          <Paperclip className={cn("h-4 w-4 shrink-0", pdf ? "text-primary" : "text-muted-foreground")} aria-hidden />
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-foreground">
+            {pdf ? pdf.name : "No attachment — matching emails send without one"}
+          </span>
+          {pdf && (
+            <span className="shrink-0 font-mono text-[9.5px] uppercase tracking-[0.1em] text-muted-foreground/70">
+              {(pdf.size / 1024 / 1024).toFixed(1)} MB
+            </span>
+          )}
+        </div>
+
+        <input
+          ref={pdfRef}
+          type="file"
+          accept="application/pdf,.pdf"
           className="hidden"
           onChange={(e) => {
             const f = e.target.files?.[0];
@@ -429,69 +578,47 @@ function PlaybookCard({
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <Button
             size="sm"
-            variant={playbook.pdf ? "outline" : "default"}
+            variant={pdf ? "outline" : "default"}
             disabled={busy || !canPersist}
-            onClick={() => fileRef.current?.click()}
+            onClick={() => pdfRef.current?.click()}
             data-track="playbook_pdf_upload"
             className="gap-1.5"
           >
             <Upload className="h-3.5 w-3.5" aria-hidden />
-            {playbook.pdf ? "Replace PDF" : "Upload PDF"}
+            {pdf ? "Replace PDF" : "Upload PDF"}
           </Button>
-          {playbook.pdf && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy || !canPersist}
-              onClick={removePdf}
-              data-track="playbook_pdf_remove"
-              className="gap-1.5 text-muted-foreground"
-            >
-              <Trash2 className="h-3.5 w-3.5" aria-hidden />
-              Remove
-            </Button>
+          {pdf && (
+            <>
+              {pdf.url && (
+                <a
+                  href={pdf.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  data-track="playbook_pdf_view"
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                >
+                  <FileText className="h-3.5 w-3.5" aria-hidden />
+                  View
+                </a>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy || !canPersist}
+                onClick={removePdf}
+                data-track="playbook_pdf_remove"
+                className="gap-1.5 text-muted-foreground"
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                Remove
+              </Button>
+            </>
           )}
         </div>
-      </div>
-
-      {/* knowledge base (source of truth = repo file, shown read-only) */}
-      <div className="mt-3 rounded-lg border border-border bg-background/40 px-3 py-2.5">
-        <button
-          type="button"
-          onClick={() => setShowKb((s) => !s)}
-          className="flex w-full items-center justify-between gap-2"
-          aria-expanded={showKb}
-          data-track="playbook_kb_toggle"
-        >
-          <span className="flex items-center gap-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-            <BookOpen className="h-3.5 w-3.5" aria-hidden />
-            Knowledge base
-            {playbook.kb.present ? (
-              <span className="text-primary">· {(playbook.kb.chars / 1000).toFixed(1)}k chars</span>
-            ) : (
-              <span className="text-destructive">· missing</span>
-            )}
-          </span>
-          <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showKb && "rotate-180")} aria-hidden />
-        </button>
-        {showKb && (
-          <div className="mt-2">
-            {playbook.kb.present ? (
-              <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-md border border-border bg-background px-2.5 py-2 font-mono text-[10.5px] leading-relaxed text-muted-foreground">
-                {playbook.kb.preview}
-                {playbook.kb.chars > playbook.kb.preview.length ? "\n…" : ""}
-              </pre>
-            ) : (
-              <p className="text-[11px] text-muted-foreground">
-                No <span className="font-mono text-foreground/80">{playbook.slug}.md</span> found.
-              </p>
-            )}
-            <p className="mt-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
-              Edit in <span className="text-foreground/80">components/knowledgebase/{playbook.slug}.md</span> — the file is
-              the source of truth for the AI email copy.
-            </p>
-          </div>
-        )}
+        <p className="mt-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
+          Attached to every outreach email whose Category matches this sector. PDF only, max 18 MB (Gmail&apos;s limit
+          after encoding). Optional.
+        </p>
       </div>
 
       {error && (
@@ -532,5 +659,24 @@ function PlaybookCard({
         </div>
       )}
     </div>
+  );
+}
+
+function KbSourceBadge({ source }: { source: KbSource }) {
+  const map = {
+    uploaded: { label: "Uploaded", cls: "border-primary/40 text-primary" },
+    repo: { label: "Built-in", cls: "border-border text-muted-foreground" },
+    none: { label: "Missing", cls: "border-destructive/40 text-destructive" },
+  } as const;
+  const s = map[source];
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border bg-transparent px-2 py-0.5 text-[9.5px] font-semibold uppercase tracking-[0.08em]",
+        s.cls,
+      )}
+    >
+      {s.label}
+    </span>
   );
 }

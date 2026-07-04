@@ -1,18 +1,16 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
-import { loadPlaybooks, playbookPdfUrl, savePlaybooks } from "@/lib/pipeline/sectorStore";
-import { isSectorSlug, kbFileName, mergePlaybooks, type SectorPlaybook } from "@/lib/pipeline/sectors";
+import { effectiveSectorKb, loadPlaybooks, playbookPdfUrl, savePlaybooks } from "@/lib/pipeline/sectorStore";
+import { isSectorSlug, mergePlaybooks, type SectorPlaybook } from "@/lib/pipeline/sectors";
 
 // Sector Playbooks config API (Sector Playbooks tab). GET returns each sector's
-// category keywords, attachment PDF (public URL), and knowledge-base status;
-// POST patches one sector's name/category keywords. The PDF bytes are handled by
-// the sibling /pdf route. Server-side (keeps the service role key off the
-// browser). Mapping persists in app_settings["sector_playbooks"].
+// category keywords and its knowledge-base status (uploaded markdown, or the
+// repo file it falls back to); POST patches one sector's name/category keywords.
+// The KB markdown itself is uploaded via the sibling /kb route. Server-side.
+// Mapping persists in app_settings["sector_playbooks"].
 //
 // SECURITY — TODO before exposing publicly: same-origin (CSRF) floor only, NOT
-// real auth; gate on `playbooks.manage` here once auth lands (this decides which
-// PDF is attached to outreach and how leads are routed to a sector).
+// real auth; gate on `playbooks.manage` here once auth lands (this decides how
+// leads route to a sector and which KB grounds the outreach email).
 export const runtime = "nodejs";
 
 const KB_PREVIEW_CHARS = 600;
@@ -20,34 +18,29 @@ const MAX_CATEGORIES = 40;
 const MAX_KEYWORD_LEN = 60;
 const MAX_NAME_LEN = 80;
 
-interface KbInfo {
-  present: boolean;
-  chars: number;
-  preview: string;
-}
-
-/** Read the sector's KB markdown (source of truth: components/knowledgebase). */
-async function readKb(slug: string): Promise<KbInfo> {
-  try {
-    const path = join(process.cwd(), "components", "knowledgebase", kbFileName(slug));
-    const text = await readFile(path, "utf8");
-    return { present: true, chars: text.length, preview: text.slice(0, KB_PREVIEW_CHARS) };
-  } catch {
-    return { present: false, chars: 0, preview: "" };
-  }
-}
-
 async function enrich(playbooks: SectorPlaybook[]) {
   return Promise.all(
-    playbooks.map(async (pb) => ({
-      slug: pb.slug,
-      name: pb.name,
-      categories: pb.categories,
-      pdf: pb.pdf
-        ? { name: pb.pdf.name, size: pb.pdf.size, uploadedAt: pb.pdf.uploadedAt, url: playbookPdfUrl(pb) }
-        : null,
-      kb: await readKb(pb.slug),
-    })),
+    playbooks.map(async (pb) => {
+      const eff = await effectiveSectorKb(pb);
+      return {
+        slug: pb.slug,
+        name: pb.name,
+        categories: pb.categories,
+        kb: {
+          source: eff.source, // "uploaded" | "repo" | "none"
+          present: eff.source !== "none",
+          fileName: pb.kb?.name ?? `${pb.slug}.md`,
+          size: pb.kb?.size ?? eff.content.length,
+          uploadedAt: pb.kb?.uploadedAt ?? "",
+          chars: eff.content.length,
+          preview: eff.content.slice(0, KB_PREVIEW_CHARS),
+        },
+        // Attachment PDF (separate from the KB markdown): the email attachment.
+        pdf: pb.pdf
+          ? { name: pb.pdf.name, size: pb.pdf.size, uploadedAt: pb.pdf.uploadedAt, url: playbookPdfUrl(pb) }
+          : null,
+      };
+    }),
   );
 }
 
@@ -117,10 +110,7 @@ export async function POST(req: Request): Promise<Response> {
 
   const result = await savePlaybooks(mergePlaybooks(playbooks));
   if (result === "demo") {
-    return Response.json(
-      { ok: false, error: "Connect Supabase to save sector config here." },
-      { status: 409 },
-    );
+    return Response.json({ ok: false, error: "Connect Supabase to save sector config here." }, { status: 409 });
   }
   if (result === "missing-table") {
     return Response.json(

@@ -5,16 +5,21 @@ import { isSectorSlug, mergePlaybooks } from "@/lib/pipeline/sectors";
 // Upload / remove the attachment PDF for one sector (Sector Playbooks tab). The
 // bytes go to the public `sector-assets` Storage bucket at "<slug>.pdf" (upsert,
 // so re-uploading replaces); the object metadata is recorded in the
-// app_settings["sector_playbooks"] mapping. The send flow attaches this PDF by
-// its public URL. Server-side; keeps the service role key off the browser.
+// app_settings["sector_playbooks"] mapping alongside the sector's KB markdown.
+// The send flow resolves a lead's Category → this sector → the PDF's public URL
+// and passes it to n8n, whose Gmail node downloads + attaches it. Server-side;
+// keeps the service role key off the browser.
 //
 // SECURITY — TODO: same-origin (CSRF) floor only; gate on `playbooks.manage`
 // once auth lands.
 export const runtime = "nodejs";
 
-// Cap uploads well under Gmail's 25 MB attachment limit (base64 inflates ~33%),
-// so a mapped PDF never bounces the outreach email it's attached to.
-const MAX_PDF_BYTES = 15 * 1024 * 1024;
+// Gmail caps a message at ~25 MB measured on the BASE64-ENCODED MIME payload,
+// which inflates raw bytes by ~33%. Cap the raw PDF at 18 MB *decimal*
+// (18,000,000 B → ~24 MB encoded) so even a maxed upload clears Gmail with
+// headroom for the HTML body — rejected here rather than silently bouncing the
+// outreach email. (The raw APMG portfolios are ~36–40 MB — compress them first.)
+const MAX_PDF_BYTES = 18 * 1000 * 1000;
 
 function persistError(result: "demo" | "missing-table" | "error"): Response {
   if (result === "demo") {
@@ -59,7 +64,10 @@ export async function POST(req: Request): Promise<Response> {
   }
   if (file.size > MAX_PDF_BYTES) {
     return Response.json(
-      { ok: false, error: `PDF is too large (max ${(MAX_PDF_BYTES / 1024 / 1024).toFixed(0)} MB — compress it first).` },
+      {
+        ok: false,
+        error: `PDF is too large (max ${(MAX_PDF_BYTES / 1000 / 1000).toFixed(0)} MB — Gmail can't attach more once base64-encoded; compress it first).`,
+      },
       { status: 413 },
     );
   }
@@ -115,13 +123,17 @@ export async function DELETE(req: Request): Promise<Response> {
     return Response.json({ ok: true }); // already none
   }
 
-  // Best-effort object delete (a failed storage delete shouldn't strand the
-  // mapping pointing at a file the UI says is gone).
-  await deleteObject(SECTOR_ASSETS_BUCKET, target.pdf.path);
+  // Clear the mapping and persist FIRST, so a failed save never strands
+  // app_settings pointing at a file we already deleted. Only once the metadata
+  // is gone do we best-effort delete the Storage object (a failed delete just
+  // leaves an orphaned object, not a broken reference).
+  const path = target.pdf.path;
   target.pdf = null;
 
   const result = await savePlaybooks(mergePlaybooks(playbooks));
   if (result !== "ok") return persistError(result);
+
+  await deleteObject(SECTOR_ASSETS_BUCKET, path);
 
   return Response.json({ ok: true });
 }

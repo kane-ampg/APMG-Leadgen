@@ -14,6 +14,8 @@ export const PERMISSIONS = {
   "campaigns.send": "Send an outreach email campaign to leads",
   "integrations.view": "View integrations",
   "integrations.manage": "Create, pause, and reconnect automations",
+  "playbooks.view": "View sector playbooks",
+  "playbooks.manage": "Configure sector playbooks (category mapping + attachment PDF)",
   "telemetry.view": "View click telemetry",
   "settings.view": "View settings",
   "settings.manage": "Change settings",

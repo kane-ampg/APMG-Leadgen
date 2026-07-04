@@ -1,0 +1,252 @@
+{
+  "name": "APMG Campaign Send Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## APMG — Send Campaign (with sector PDF attachment)\n\n**Trigger:** the dashboard's Pipeline → Send Campaigns tab POSTs the rendered outreach messages here when you confirm a send (app route: app/api/pipeline/campaigns/send).\n\n**Setup (once):**\n1. Open both **Gmail** nodes and select your Gmail (OAuth2) credential.\n2. RECOMMENDED — open the **Send Webhook** node → Authentication → **Header Auth**, create a header credential with name `x-apmg-secret` and a random value, then set that same value as `N8N_WEBHOOK_SECRET` in the app's env (the send route sends it automatically). This webhook sends real email, so leaving it open lets anyone who finds the URL send on your behalf.\n3. Activate the workflow, copy the **Production URL** from the Webhook node.\n4. Set it as `N8N_CAMPAIGN_WEBHOOK_URL` in the app's `.env.local` (or the Integrations tab's campaign webhook) and restart the app.\n\n**What it does per message:**\n- If the message carries `attachment.url` (the app resolves the lead's Category → a Sector Playbook and passes the sector PDF's public URL), it downloads that PDF and attaches it to the email.\n- Otherwise it sends the email with no attachment.\n- The CTA link is already rewritten per lead to /t/<lead>?c=<campaign> by the app.\n\n**Request body:** `{ campaign, messages: [{ to, leadId, subject, html, attachment?: { url, filename } }] }`\n**Response:** `{ ok: true, sent }`\n\nSee also references/Sector Playbooks — the tab that maps Category → PDF (Supabase Storage, public bucket `sector-assets`).",
+        "height": 640,
+        "width": 480,
+        "color": 4
+      },
+      "id": "s0000000-0000-4000-8000-000000000001",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1040, -200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "campaign-send",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "s1000000-0000-4000-8000-000000000002",
+      "name": "Send Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-512, 128],
+      "webhookId": "a7c2f1e9-3b48-4d61-95a2-8f4c1e6d0b27"
+    },
+    {
+      "parameters": {
+        "jsCode": "// One item per message. Body: { campaign, messages: [{ to, leadId, subject, html, attachment?: { url, filename } }] }\nconst first = $input.first().json;\nconst body = first.body ?? first;\nconst campaign = (body.campaign || \"outreach-2026\").toString();\nconst messages = Array.isArray(body.messages) ? body.messages : [];\n\nconst out = [];\nfor (const m of messages) {\n  if (!m || typeof m !== \"object\") continue;\n  const to = (m.to || \"\").toString().trim();\n  if (!to) continue;\n  const att = m.attachment && typeof m.attachment === \"object\" ? m.attachment : null;\n  out.push({\n    json: {\n      campaign,\n      to,\n      leadId: (m.leadId || \"\").toString(),\n      subject: (m.subject || \"\").toString(),\n      html: (m.html || \"\").toString(),\n      attachment_url: att && att.url ? att.url.toString() : \"\",\n      attachment_name: att && att.filename ? att.filename.toString() : \"\",\n    },\n  });\n}\nreturn out;"
+      },
+      "id": "s2000000-0000-4000-8000-000000000003",
+      "name": "Split Messages",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-288, 128]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "has-attachment",
+              "leftValue": "={{ $json.attachment_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "s3000000-0000-4000-8000-000000000004",
+      "name": "Has Attachment?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [-64, 128]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.attachment_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "attachment"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "s4000000-0000-4000-8000-000000000005",
+      "name": "Download Attachment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [176, 0],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Split Messages').item.json.to }}",
+        "subject": "={{ $('Split Messages').item.json.subject }}",
+        "emailType": "html",
+        "message": "={{ $('Split Messages').item.json.html }}",
+        "options": {
+          "appendAttribution": false,
+          "attachmentsUi": {
+            "attachmentsBinary": [
+              {
+                "property": "attachment"
+              }
+            ]
+          }
+        }
+      },
+      "id": "s5000000-0000-4000-8000-000000000006",
+      "name": "Send With Attachment",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [416, 0],
+      "webhookId": "c9e4a2b1-6d37-4f82-b1a5-3e7c9d0f4a68",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.to }}",
+        "subject": "={{ $json.subject }}",
+        "emailType": "html",
+        "message": "={{ $json.html }}",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "id": "s6000000-0000-4000-8000-000000000007",
+      "name": "Send Plain",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [176, 272],
+      "webhookId": "d1f5b3c2-7e48-4a93-c2b6-4f8d0e1a5b79",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "sent",
+        "options": {}
+      },
+      "id": "s7000000-0000-4000-8000-000000000008",
+      "name": "Collect Sent",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [672, 128]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: true, sent: ($json.sent || []).length } }}",
+        "options": {}
+      },
+      "id": "s8000000-0000-4000-8000-000000000009",
+      "name": "Respond OK",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [896, 128]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Send Webhook": {
+      "main": [
+        [
+          {
+            "node": "Split Messages",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Messages": {
+      "main": [
+        [
+          {
+            "node": "Has Attachment?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Attachment?": {
+      "main": [
+        [
+          {
+            "node": "Download Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Plain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Attachment": {
+      "main": [
+        [
+          {
+            "node": "Send With Attachment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send With Attachment": {
+      "main": [
+        [
+          {
+            "node": "Collect Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Plain": {
+      "main": [
+        [
+          {
+            "node": "Collect Sent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Collect Sent": {
+      "main": [
+        [
+          {
+            "node": "Respond OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

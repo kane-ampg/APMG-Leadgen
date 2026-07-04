@@ -728,7 +728,7 @@ function FlatLeads() {
 /* ─────────────────────────────  migration prompt  ───────────────────────────── */
 
 const MIGRATION_SQL =
-  "alter table public.leads add column if not exists batch text;\ncreate index if not exists leads_batch_idx on public.leads (batch);";
+  "alter table public.leads add column if not exists batch text;\nalter table public.leads add column if not exists category text;\ncreate index if not exists leads_batch_idx on public.leads (batch);";
 
 /** Shown when the `batch` column is missing — guides the one-time migration. */
 export function MigrationCard() {

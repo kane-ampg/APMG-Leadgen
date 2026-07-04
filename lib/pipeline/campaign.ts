@@ -10,17 +10,20 @@
 /** Default tracking tag (the `?c=` value). Mirrors the n8n outreach campaign. */
 export const DEFAULT_CAMPAIGN = "outreach-2026";
 
-/** Default subject line, lifted verbatim from the n8n outreach email. */
-export const DEFAULT_SUBJECT = "A quick idea to bring you more customers";
+/** Default subject line. APMG sells property maintenance TO the recipient — not
+ *  lead generation — so the copy pitches trusted, one-partner upkeep. */
+export const DEFAULT_SUBJECT = "One trusted partner for your property maintenance";
 
 /**
  * Default HTML body. `{{business}}` and `{{link}}` are the two merge tokens:
- * the recipient's business name and the per-lead tracked CTA URL.
+ * the recipient's business name and the per-lead tracked CTA URL. Framed as
+ * APMG's real offer — multi-trade property maintenance for the recipient's own
+ * facility — never a lead-generation / "more customers" pitch.
  */
 export const DEFAULT_BODY_HTML = `<p>Hi {{business}},</p>
-<p>We help businesses like yours get a steady stream of qualified, ready-to-buy customers — without the busywork.</p>
-<p><a href="{{link}}">See how it works &rarr;</a></p>
-<p>Not interested? No problem — just ignore this email.</p>
+<p>APMG Services is a Melbourne-based, multi-trade property maintenance partner — painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe — all through one reliable team.</p>
+<p>We keep facilities like yours safe, compliant and well maintained, with minimal disruption to the people who rely on them.</p>
+<p><a href="{{link}}">See how APMG can help &rarr;</a></p>
 <p>&mdash; The APMG Services team</p>`;
 
 /** The merge tokens the composer documents to the user. */
@@ -98,4 +101,80 @@ export function renderBody(template: string, vars: { business?: string | null; l
 export function renderSubject(template: string, vars: { business?: string | null }): string {
   const business = (vars.business ?? "").trim() || "there";
   return template.split("{{business}}").join(business);
+}
+
+/* ────────────────────────  AI compose (per-lead drafts)  ───────────────────────
+ * The "Compose email" action hands the selected leads to the n8n compose
+ * automation (references/Compose Email Automation.json): it extracts up to 10
+ * emails per lead (CSV first, contact-page scrape as the fallback) and has
+ * Claude draft a subject + HTML body tailored to the lead's CSV Category.
+ * Drafts keep the {{link}} token — the send route substitutes the tracked URL.
+ */
+
+/** Hard cap on leads per compose run — each lead costs up to two page fetches
+ *  plus a Claude call, and the webhook responds synchronously. */
+export const MAX_COMPOSE_LEADS = 10;
+
+/** Max addresses the automation may attach to one lead. */
+export const MAX_DRAFT_EMAILS = 10;
+
+/** A lead as handed to the compose automation. */
+export interface ComposeLeadInput {
+  id: string;
+  name: string;
+  website?: string | null;
+  category?: string | null;
+  emails?: string[] | null;
+}
+
+/** Where a draft's addresses came from. */
+export type DraftEmailSource = "csv" | "scraped" | "none";
+
+/** One per-lead draft returned by the automation (or simulated in demo mode). */
+export interface ComposeDraft {
+  id: string;
+  business: string;
+  category: string | null;
+  url: string | null;
+  emails: string[];
+  email_source: DraftEmailSource;
+  best_email: string | null;
+  subject: string;
+  html: string;
+}
+
+/** Guarantee the draft body carries the {{link}} CTA token the send route
+ *  rewrites per lead — without it the click is untracked and Sales never
+ *  sees the engagement. */
+export function ensureLinkToken(html: string): string {
+  if (html.includes("{{link}}")) return html;
+  return `${html}\n<p><a href="{{link}}">See how it works &rarr;</a></p>`;
+}
+
+/** Simulated draft used when N8N_COMPOSE_WEBHOOK_URL is unset (demo mode) —
+ *  mirrors the shape and rules of the live automation (tailored opening
+ *  paragraph, {{link}} CTA, APMG sign-off) so the review UI is exercisable. */
+export function demoDraft(lead: ComposeLeadInput): ComposeDraft {
+  const emails = (lead.emails ?? []).map((e) => e.trim().toLowerCase()).filter(isEmail).slice(0, MAX_DRAFT_EMAILS);
+  const category = (lead.category ?? "").trim() || null;
+  const trade = category ? category.replace(/\s*services?\s*$/i, "").trim() || category : "local";
+  const business = escapeHtml(lead.name.trim() || "there");
+  const html =
+    `<p>Hi ${business},</p>` +
+    `<p>APMG Services is a Melbourne-based multi-trade property maintenance partner &mdash; painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe &mdash; all handled by one licensed team. ` +
+    `We keep ${escapeHtml(trade)} facilities like yours safe, compliant and well maintained, working around your operations so the people who rely on them are never disrupted. ` +
+    `Whether it&rsquo;s scheduled upkeep or an urgent repair, you get one reliable partner instead of chasing multiple contractors.</p>` +
+    `<p><a href="{{link}}">See how APMG can help &rarr;</a></p>` +
+    `<p>&mdash; The APMG Services team</p>`;
+  return {
+    id: lead.id,
+    business: lead.name,
+    category,
+    url: lead.website ?? null,
+    emails,
+    email_source: emails.length ? "csv" : "none",
+    best_email: bestEmail(emails),
+    subject: `Property maintenance & trades for ${lead.name}`.slice(0, 120),
+    html,
+  };
 }

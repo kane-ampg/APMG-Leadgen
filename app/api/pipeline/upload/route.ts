@@ -31,7 +31,7 @@ interface UploadResult {
 }
 
 /**
- * Whitelist a client row down to the 12 stored columns. `id`/`created_at`/`batch`
+ * Whitelist a client row down to the 13 stored columns. `id`/`created_at`/`batch`
  * are never taken from the row (the DB defaults / the request's top-level batch
  * win), so a caller can't forge them. Returns null for rows without a name.
  */
@@ -59,6 +59,7 @@ function sanitizeRow(input: unknown): LeadImportRow | null {
     featured_image: str(o.featured_image),
     bing_maps_url: str(o.bing_maps_url),
     rating: num(o.rating),
+    category: str(o.category),
     website: str(o.website),
     phone: str(o.phone),
     emails: strArr(o.emails),

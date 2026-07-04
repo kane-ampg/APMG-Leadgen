@@ -13,10 +13,10 @@ export const runtime = "nodejs";
 
 const TABLE = "leads";
 const LIMIT = 2000;
-// the flat listing doesn't need `batch`; folder-aware reads add it on
+// the flat listing doesn't need the later-added columns; full reads add them on
 const COLS_BASE =
   "id,name,address,featured_image,bing_maps_url,rating,website,phone,emails,social_medias,facebook,instagram,twitter,created_at";
-const COLS = `${COLS_BASE},batch`;
+const COLS = `${COLS_BASE},batch,category`;
 
 type Target = { base: string; key: string };
 
@@ -67,19 +67,29 @@ export async function GET(req: Request): Promise<Response> {
     console.error(`[pipeline/leads] Supabase ${res.status}:`, detail.slice(0, 1000));
 
     if (isMissingBatchColumn(detail)) {
-      // A folder-filtered read genuinely needs the column → prompt the migration.
-      if (filter) {
+      // A folder filter genuinely needs `batch`; `category` is optional. Only
+      // prompt the migration when the column the read actually depends on is
+      // missing — otherwise degrade and retry without the optional column.
+      const batchMissing = /batch/i.test(detail);
+      if (filter && batchMissing) {
         return Response.json({ ok: false, mode: "live", rows: [], total: 0, needsMigration: true, error: "Folders need a one-time migration." }, { status: 422 });
       }
-      // The flat listing doesn't need `batch` — degrade and retry without it.
+      // Filtered read with only `category` missing → keep the filter, drop
+      // `category`. Flat listing → drop both optional columns.
+      const cols = filter ? `${COLS_BASE},batch` : COLS_BASE;
       try {
-        res = await fetchLeads(target, COLS_BASE, null);
+        res = await fetchLeads(target, cols, filter);
       } catch (e) {
         console.error("[pipeline/leads] degraded fetch failed:", e);
         return Response.json({ ok: false, mode: "live", rows: [], total: 0, error: "Could not reach the database." }, { status: 502 });
       }
       if (!res.ok) {
-        console.error(`[pipeline/leads] degraded ${res.status}:`, (await res.text().catch(() => "")).slice(0, 500));
+        const detail2 = await res.text().catch(() => "");
+        console.error(`[pipeline/leads] degraded ${res.status}:`, detail2.slice(0, 500));
+        // batch column missing on the degraded filtered retry → migration needed
+        if (filter && isMissingBatchColumn(detail2)) {
+          return Response.json({ ok: false, mode: "live", rows: [], total: 0, needsMigration: true, error: "Folders need a one-time migration." }, { status: 422 });
+        }
         return Response.json({ ok: false, mode: "live", rows: [], total: 0, error: "Couldn't read the leads table." }, { status: 502 });
       }
       // fall through to the success path with the degraded response

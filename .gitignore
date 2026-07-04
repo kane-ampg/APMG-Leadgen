@@ -25,3 +25,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# large source portfolio PDFs (~40MB scans). The compressed, emailable copies
+# live in references/portfolios/ and are the ones uploaded to Supabase Storage.
+/references/Aged Care.pdf
+/references/Early.pdf
+/references/Education.pdf

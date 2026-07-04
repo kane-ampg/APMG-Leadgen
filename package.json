@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "seed:pdfs": "node scripts/seed-sector-pdfs.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",

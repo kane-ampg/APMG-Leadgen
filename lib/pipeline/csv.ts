@@ -1,9 +1,10 @@
 // CSV parsing + mapping for the Bing Maps Scraper export.
 //
 // Pure and framework-free so it runs in the browser during the "Read & parse"
-// phase of the Pipeline tool. We keep only the 12 columns the importer cares
+// phase of the Pipeline tool. We keep only the 13 columns the importer cares
 // about (mapped by header NAME, so column order doesn't matter) and drop the
-// rest (ID/ypid, lat/long, Rating Info, Category, Open Hours).
+// rest (ID/ypid, lat/long, Rating Info, Open Hours). "Category" is kept — the
+// compose automation tailors each AI-drafted email to it.
 
 export interface LeadImportRow {
   name: string;
@@ -11,6 +12,7 @@ export interface LeadImportRow {
   featured_image: string | null;
   bing_maps_url: string | null;
   rating: number | null;
+  category: string | null;
   website: string | null;
   phone: string | null;
   emails: string[];
@@ -117,7 +119,7 @@ function cleanRating(v: string | undefined): number | null {
 }
 
 /**
- * Map a parsed grid → the 12 kept columns, by header name (case-insensitive,
+ * Map a parsed grid → the 13 kept columns, by header name (case-insensitive,
  * order-agnostic). Rows without a Name are dropped (header junk / blank lines).
  */
 export function mapLeads(grid: string[][]): ParsedCsv {
@@ -135,6 +137,7 @@ export function mapLeads(grid: string[][]): ParsedCsv {
     featured_image: idx("Featured image"),
     bing_maps_url: idx("Bing Maps URL"),
     rating: idx("Rating"),
+    category: idx("Category"),
     website: idx("Website"),
     phone: idx("Phone"),
     emails: idx("Emails"),
@@ -167,6 +170,7 @@ export function mapLeads(grid: string[][]): ParsedCsv {
       featured_image: clean(get(col.featured_image)),
       bing_maps_url: clean(get(col.bing_maps_url)),
       rating: cleanRating(get(col.rating)),
+      category: clean(get(col.category)),
       website: clean(get(col.website)),
       phone: clean(get(col.phone)),
       emails: cleanList(get(col.emails)),

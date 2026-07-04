@@ -124,6 +124,13 @@ export function LeadDetail({ lead, onClose }: { lead: LeadView; onClose: () => v
                 <Dash />
               )}
             </Fact>
+            <Fact label="Category">
+              {lead.category ? (
+                <span className="text-[13.5px] text-foreground">{lead.category}</span>
+              ) : (
+                <Dash />
+              )}
+            </Fact>
             <Fact label="Folder">
               <span className="text-[13.5px] text-foreground">
                 {lead.batch && lead.batch !== "__ungrouped__" ? lead.batch : "Ungrouped"}

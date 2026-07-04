@@ -1,5 +1,6 @@
 import {
   Activity,
+  BookOpen,
   Filter,
   Handshake,
   LayoutDashboard,
@@ -22,6 +23,7 @@ export type TabId =
   | "sales"
   | "closed"
   | "integrations"
+  | "playbooks"
   | "telemetry"
   | "settings";
 
@@ -61,6 +63,7 @@ export const NAV: NavSection[] = [
     caption: "Automate",
     items: [
       { id: "integrations", label: "Integrations", icon: Workflow, perm: "integrations.view" },
+      { id: "playbooks", label: "Sector Playbooks", icon: BookOpen, perm: "playbooks.view" },
     ],
   },
   {
@@ -96,6 +99,7 @@ export const TAB_LABEL: Record<TabId, string> = {
   sales: "Sales",
   closed: "Closed deals",
   integrations: "Integrations",
+  playbooks: "Sector Playbooks",
   telemetry: "Telemetry",
   settings: "Settings",
 };

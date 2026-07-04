@@ -15,6 +15,7 @@ import { OverviewPage } from "./OverviewPage";
 import { LeadsPage } from "./LeadsPage";
 import { PipelinePage } from "./PipelinePage";
 import { SalesPage } from "./SalesPage";
+import { SectorPlaybooksPage } from "./SectorPlaybooksPage";
 import { Sidebar } from "./Sidebar";
 import { TelemetryInspector } from "./TelemetryInspector";
 
@@ -107,6 +108,8 @@ export function DashboardShell() {
                   <ClosedDealsPage />
                 ) : activeTab === "integrations" ? (
                   <IntegrationsPage />
+                ) : activeTab === "playbooks" ? (
+                  <SectorPlaybooksPage />
                 ) : (
                   <ComingSoon tab={activeTab} />
                 )}

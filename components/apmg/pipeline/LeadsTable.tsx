@@ -20,6 +20,7 @@ export interface LeadView {
   website?: string | null;
   phone?: string | null;
   rating?: number | string | null;
+  category?: string | null;
   emails?: string[] | null;
   social_medias?: string[] | null;
   featured_image?: string | null;

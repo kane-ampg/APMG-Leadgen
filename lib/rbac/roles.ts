@@ -26,9 +26,9 @@ export const ROLES: Record<Role, RoleDef> = {
   },
   client: {
     label: "Client",
-    description: "Customer portal — view and export delivered leads.",
+    description: "Customer portal — browse services, view and export delivered leads.",
     enabled: true,
-    permissions: ["overview.view", "leads.view", "leads.export"],
+    permissions: ["services.view", "overview.view", "leads.view", "leads.export"],
   },
   sales: {
     label: "Sales",

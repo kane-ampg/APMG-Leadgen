@@ -3,11 +3,13 @@ import {
   BookOpen,
   Filter,
   Handshake,
+  HardHat,
   LayoutDashboard,
   Megaphone,
   PhoneCall,
   Radio,
   Settings,
+  Sparkles,
   Users,
   Workflow,
   type LucideIcon,
@@ -15,6 +17,7 @@ import {
 import { type Permission } from "@/lib/rbac/permissions";
 
 export type TabId =
+  | "services"
   | "overview"
   | "pipeline"
   | "leads"
@@ -24,6 +27,7 @@ export type TabId =
   | "closed"
   | "integrations"
   | "playbooks"
+  | "composer"
   | "telemetry"
   | "settings";
 
@@ -42,6 +46,12 @@ export interface NavSection {
 }
 
 export const NAV: NavSection[] = [
+  {
+    caption: "Portal",
+    items: [
+      { id: "services", label: "Our Services", icon: HardHat, perm: "services.view" },
+    ],
+  },
   {
     caption: "Monitor",
     items: [
@@ -64,6 +74,7 @@ export const NAV: NavSection[] = [
     items: [
       { id: "integrations", label: "Integrations", icon: Workflow, perm: "integrations.view" },
       { id: "playbooks", label: "Sector Playbooks", icon: BookOpen, perm: "playbooks.view" },
+      { id: "composer", label: "Email Composer", icon: Sparkles, perm: "composer.view" },
     ],
   },
   {
@@ -91,6 +102,7 @@ export function firstAllowedTab(can: (perm: Permission) => boolean): TabId {
 }
 
 export const TAB_LABEL: Record<TabId, string> = {
+  services: "Our Services",
   overview: "Overview",
   pipeline: "Pipeline",
   leads: "Leads",
@@ -100,6 +112,7 @@ export const TAB_LABEL: Record<TabId, string> = {
   closed: "Closed deals",
   integrations: "Integrations",
   playbooks: "Sector Playbooks",
+  composer: "Email Composer",
   telemetry: "Telemetry",
   settings: "Settings",
 };

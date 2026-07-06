@@ -222,6 +222,8 @@ function PlaybookCard({
   const [newCat, setNewCat] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Post-upload note on PDF compression (green = shrunk & Gmail-ready, amber = warn).
+  const [notice, setNotice] = useState<{ text: string; warn: boolean } | null>(null);
   const [showKb, setShowKb] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const pdfRef = useRef<HTMLInputElement>(null);
@@ -308,11 +310,12 @@ function PlaybookCard({
 
   async function uploadPdf(file: File) {
     setError(null);
-    // Reject oversized files instantly (mirrors the server's 18 MB cap) rather
-    // than streaming a 36–40 MB portfolio only to get a 413 — or an opaque
+    setNotice(null);
+    // Reject oversized files instantly (mirrors the server's 50 MB cap) rather
+    // than streaming a large portfolio only to get a 413 — or an opaque
     // platform body-size error — at the end.
-    if (file.size > 18 * 1000 * 1000) {
-      setError("PDF is too large (max 18 MB — Gmail's attachment limit; compress it first).");
+    if (file.size > 50 * 1000 * 1000) {
+      setError("PDF is too large (max 50 MB — compress it first).");
       if (pdfRef.current) pdfRef.current.value = "";
       return;
     }
@@ -322,10 +325,37 @@ function PlaybookCard({
       fd.append("slug", playbook.slug);
       fd.append("file", file);
       const res = await fetch("/api/sector-playbooks/pdf", { method: "POST", body: fd });
-      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      const data = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: string;
+        originalSize?: number;
+        storedSize?: number;
+        compression?: "compressed" | "unchanged" | "unavailable" | "failed";
+        quality?: string | null;
+        underGmailLimit?: boolean;
+      } | null;
       if (!res.ok || !data?.ok) {
         setError(data?.error ?? `Upload failed (${res.status}).`);
         return;
+      }
+      // Tell the operator whether the PDF was shrunk under Gmail's cap — the
+      // whole reason large uploads are allowed (n8n's Gmail node tops out ~25 MB).
+      const mb = (b?: number) => (typeof b === "number" ? (b / 1024 / 1024).toFixed(1) : "?");
+      if (data.compression === "compressed") {
+        const tier = data.quality === "/screen" ? "maximum" : "standard";
+        let text = `Compressed ${mb(data.originalSize)} MB → ${mb(data.storedSize)} MB (${tier} compression) for Gmail.`;
+        if (data.underGmailLimit === false) {
+          text += " Still over Gmail's ~25 MB limit — compress it further before sending.";
+        }
+        setNotice({ text, warn: data.underGmailLimit === false });
+      } else if (data.underGmailLimit === false) {
+        setNotice({
+          text:
+            data.compression === "unavailable"
+              ? `Stored uncompressed at ${mb(data.storedSize)} MB — Ghostscript isn't installed on the server, so this may exceed Gmail's ~25 MB attachment limit.`
+              : `Stored at ${mb(data.storedSize)} MB — couldn't get it under Gmail's ~25 MB limit; compress it before sending.`,
+          warn: true,
+        });
       }
       onChanged();
     } catch {
@@ -338,6 +368,7 @@ function PlaybookCard({
 
   async function removePdf() {
     setError(null);
+    setNotice(null);
     setBusy(true);
     try {
       const res = await fetch(`/api/sector-playbooks/pdf?slug=${encodeURIComponent(playbook.slug)}`, {
@@ -616,14 +647,24 @@ function PlaybookCard({
           )}
         </div>
         <p className="mt-2 font-mono text-[10px] leading-relaxed text-muted-foreground">
-          Attached to every outreach email whose Category matches this sector. PDF only, max 18 MB (Gmail&apos;s limit
-          after encoding). Optional.
+          Attached to every outreach email whose Category matches this sector. PDF only, max 50 MB — large files are
+          auto-compressed on upload to clear Gmail&apos;s ~25 MB attachment limit. Optional.
         </p>
       </div>
 
       {error && (
         <p role="alert" className="mt-2 font-mono text-[10px] leading-relaxed text-destructive">
           {error}
+        </p>
+      )}
+
+      {notice && (
+        <p
+          className={`mt-2 font-mono text-[10px] leading-relaxed ${
+            notice.warn ? "text-amber-700 dark:text-amber-300" : "text-emerald-700 dark:text-emerald-300"
+          }`}
+        >
+          {notice.text}
         </p>
       )}
 

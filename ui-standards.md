@@ -1169,9 +1169,22 @@ Every new surface must:
   "SIGNAL/RAIL" telemetry-console direction). Dark (graphite chassis `#0E0F11`)
   is the default; light is a warm "bench-print" reinterpretation with darkened,
   AA-safe reds.
-- Sidebar: 220px editorial, all five §2.3 slots; active nav uses `bg-accent/60`
-  + a 2px `bg-primary` left rule + red icon (not the zinc reverse). Sections:
-  Monitor / Automate / System.
+- Sidebar: 248px editorial (a touch wider than the 220px baseline), all five
+  §2.3 slots; active nav uses `bg-accent/60` + a 2px `bg-primary` left rule +
+  red icon (not the zinc reverse). Sections: Monitor / Automate / System.
+- Retractable rail (desktop only): a circular chevron handle overhangs the
+  right border (`-right-3`) and toggles the sidebar between 248px and a 76px
+  icon rail; state persists in `localStorage["apmg:sidebar-collapsed"]`.
+  Mechanics that keep the retract smooth: the sidebar owns a positioned
+  stacking context on desktop (`md:relative md:z-30`, NOT `md:static`) so the
+  overhanging handle paints above `<main>`; **only `width` animates** — padding
+  stays `px-5` in both states so a ~32px mark lands centred in the 76px rail and
+  the icons appear to stay put rather than jump. Timing is split per-property:
+  `width 500ms cubic-bezier(0.16,1,0.3,1)` (slow, canonical ease §14.1) while
+  the mobile drawer keeps its own `transform 300ms` slide (§14.2). Hidden
+  labels use `md:hidden`, so every collapsible button carries an explicit
+  `aria-label` (icon-only name, §16) and Pipeline/telemetry counts degrade to a
+  small `bg-primary` corner dot.
 - Type: **two readable typefaces** — Inter (body/UI/numbers) + Plus Jakarta
   Sans (headings); `tabular-nums` keeps KPI readouts, the signal ticker and
   table figures aligned (no monospace).

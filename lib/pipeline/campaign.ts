@@ -21,10 +21,10 @@ export const DEFAULT_SUBJECT = "One trusted partner for your property maintenanc
  * facility — never a lead-generation / "more customers" pitch.
  */
 export const DEFAULT_BODY_HTML = `<p>Hi {{business}},</p>
-<p>APMG Services is a Melbourne-based, multi-trade property maintenance partner — painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe — all through one reliable team.</p>
+<p>APMG Services is a Melbourne-based, multi-trade property maintenance partner covering painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe, all through one reliable team.</p>
 <p>We keep facilities like yours safe, compliant and well maintained, with minimal disruption to the people who rely on them.</p>
 <p><a href="{{link}}">See how APMG can help &rarr;</a></p>
-<p>&mdash; The APMG Services team</p>`;
+<p>The APMG Services team</p>`;
 
 /** The merge tokens the composer documents to the user. */
 export const MERGE_TOKENS = ["{{business}}", "{{link}}"] as const;
@@ -90,17 +90,69 @@ function escapeHtml(s: string): string {
     .replace(/'/g, "&#39;");
 }
 
+/**
+ * Guarantee no em/en dash reaches an outgoing email, whatever the source (AI
+ * draft, shared template, or the deterministic fallback — the model can ignore
+ * the "no em dashes" instruction, and old stored drafts predate it). Handles the
+ * literal characters and their HTML entities. Because it runs at the shared
+ * render choke point, the browser preview and the sent email stay identical.
+ *   · a dash opening a paragraph/line (e.g. a "— Sign-off") is dropped
+ *   · any other dash (spaced parenthetical or tight) becomes a comma
+ * Regular hyphens ("-", e.g. "multi-trade") are left untouched.
+ */
+export function stripDashes(s: string): string {
+  return s
+    .replace(/&mdash;|&ndash;|&#8212;|&#8211;|&#x201[34];/gi, "—")
+    .replace(/(^|>)\s*[–—―]+\s*/g, "$1")
+    .replace(/\s*[–—―]+\s*/g, ", ");
+}
+
 /** Render the HTML body, substituting both merge tokens. `business` is escaped
  *  (it lands in HTML); `link` is a URL we built ourselves, inserted verbatim. */
 export function renderBody(template: string, vars: { business?: string | null; link: string }): string {
   const business = escapeHtml((vars.business ?? "").trim() || "there");
-  return template.split("{{business}}").join(business).split("{{link}}").join(vars.link);
+  const html = template.split("{{business}}").join(business).split("{{link}}").join(vars.link);
+  return stripDashes(html);
 }
 
 /** Render the subject line. Plain text (an email header), so no HTML escaping. */
 export function renderSubject(template: string, vars: { business?: string | null }): string {
   const business = (vars.business ?? "").trim() || "there";
-  return template.split("{{business}}").join(business);
+  return stripDashes(template.split("{{business}}").join(business));
+}
+
+/**
+ * Flatten a rendered HTML body to plain text for the send webhook, so the n8n
+ * Gmail node owns all formatting. Anchors keep BOTH their label and href as
+ * `label (url)` — the tracked /t/<lead> link is content, not styling, and
+ * attribution breaks without it. Block tags become line breaks and the entities
+ * our copy uses are decoded to real characters.
+ */
+export function htmlToText(html: string): string {
+  return html
+    // links → "label (url)"; the tracked URL must survive into the text
+    .replace(/<a\b[^>]*\bhref="([^"]*)"[^>]*>(.*?)<\/a>/gis, "$2 ($1)")
+    // block-level tags → line breaks
+    .replace(/<\/(?:p|div|h[1-6]|li|tr)>/gi, "\n\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    // drop any remaining tags
+    .replace(/<[^>]+>/g, "")
+    // decode the entities our templates / AI drafts use (&amp; last)
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&rarr;/gi, "→")
+    .replace(/&rsquo;|&#8217;|&#x2019;/gi, "’")
+    .replace(/&lsquo;|&#8216;|&#x2018;/gi, "‘")
+    .replace(/&rdquo;|&#8221;|&#x201d;/gi, "”")
+    .replace(/&ldquo;|&#8220;|&#x201c;/gi, "“")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&amp;/gi, "&")
+    // tidy whitespace: no trailing spaces, collapse blank-line runs
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /* ────────────────────────  AI compose (per-lead drafts)  ───────────────────────
@@ -151,6 +203,33 @@ export function ensureLinkToken(html: string): string {
   return `${html}\n<p><a href="{{link}}">See how it works &rarr;</a></p>`;
 }
 
+/** Map a raw CSV Category to the sector wording APMG actually uses in Australian
+ *  copy, lowercased so it sits naturally mid-sentence ("aged care facilities",
+ *  not "Elderly Care facilities"). Keeps the deterministic template from echoing
+ *  awkward or non-Australian scraper labels verbatim. First match wins. */
+const SECTOR_ALIASES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/retirement/i, "retirement living"],
+  [/elderly|senior|nursing\s*home|\baged\b/i, "aged care"],
+  [/child\s*care|day\s*care|early\s*learning|kindergarten|kinder|pre-?school|childcare/i, "early learning"],
+  [/school|education|college|university/i, "education"],
+  [/strata|body\s*corporate|owners\s*corp/i, "body corporate and strata"],
+  [/medical|health|clinic|dental|hospital|aged\s*care\s*nursing/i, "healthcare"],
+  [/warehouse|industrial|factory|logistics|manufactur/i, "industrial"],
+  [/retail|shopping|store/i, "retail"],
+  [/hospitality|hotel|motel|restaurant|cafe|venue/i, "hospitality"],
+];
+
+/** Resolve the sector phrase used in the template's "We keep ___ facilities"
+ *  line: an APMG-preferred Australian term when the category matches an alias,
+ *  otherwise the raw category (lowercased, trailing "services" stripped), or a
+ *  neutral fallback when there's no category. */
+function sectorPhrase(category: string | null): string {
+  const c = (category ?? "").trim();
+  if (!c) return "commercial and residential";
+  for (const [re, phrase] of SECTOR_ALIASES) if (re.test(c)) return phrase;
+  return c.replace(/\s*services?\s*$/i, "").trim().toLowerCase() || "commercial and residential";
+}
+
 /** Deterministic per-lead draft used as the fallback (no ANTHROPIC_API_KEY, or
  *  a Claude miss) and as the base the composer overrides — mirrors the composer's
  *  shape and rules (tailored opening paragraph, {{link}} CTA, APMG sign-off) so
@@ -158,15 +237,15 @@ export function ensureLinkToken(html: string): string {
 export function demoDraft(lead: ComposeLeadInput): ComposeDraft {
   const emails = (lead.emails ?? []).map((e) => e.trim().toLowerCase()).filter(isEmail).slice(0, MAX_DRAFT_EMAILS);
   const category = (lead.category ?? "").trim() || null;
-  const trade = category ? category.replace(/\s*services?\s*$/i, "").trim() || category : "local";
+  const trade = sectorPhrase(category);
   const business = escapeHtml(lead.name.trim() || "there");
   const html =
     `<p>Hi ${business},</p>` +
-    `<p>APMG Services is a Melbourne-based multi-trade property maintenance partner &mdash; painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe &mdash; all handled by one licensed team. ` +
+    `<p>APMG Services is a Melbourne-based multi-trade property maintenance partner covering painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe, all handled by one licensed team. ` +
     `We keep ${escapeHtml(trade)} facilities like yours safe, compliant and well maintained, working around your operations so the people who rely on them are never disrupted. ` +
     `Whether it&rsquo;s scheduled upkeep or an urgent repair, you get one reliable partner instead of chasing multiple contractors.</p>` +
     `<p><a href="{{link}}">See how APMG can help &rarr;</a></p>` +
-    `<p>&mdash; The APMG Services team</p>`;
+    `<p>The APMG Services team</p>`;
   return {
     id: lead.id,
     business: lead.name,

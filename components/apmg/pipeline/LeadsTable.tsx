@@ -114,14 +114,28 @@ export function LeadsTableView({
             const checked = !!(r.id && selection?.selected.has(r.id));
             const email = bestEmail(r.emails);
             return (
-              <TableRow key={r.id ?? i} className={cn("hover:bg-muted/40", checked && "bg-primary/[0.04]")}>
+              <TableRow
+                key={r.id ?? i}
+                className={cn(
+                  "transition-colors duration-300 ease-out motion-reduce:transition-none hover:bg-muted/40",
+                  checked && "bg-primary/[0.07]",
+                )}
+              >
                 {selectable && (
-                  <TableCell className="w-9">
+                  <TableCell className="relative w-9">
+                    {/* left accent bar fades in with selection */}
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "pointer-events-none absolute inset-y-0 left-0 w-0.5 origin-center bg-primary transition-transform duration-300 ease-out motion-reduce:transition-none",
+                        checked ? "scale-y-100 opacity-100" : "scale-y-0 opacity-0",
+                      )}
+                    />
                     {r.id && (
                       <input
                         type="checkbox"
                         aria-label={`Select ${r.name}`}
-                        className="h-3.5 w-3.5 cursor-pointer accent-primary align-middle"
+                        className="h-3.5 w-3.5 cursor-pointer accent-primary align-middle transition-transform duration-150 ease-out active:scale-90"
                         checked={checked}
                         onChange={() => selection!.onToggle(r.id!)}
                       />

@@ -11,6 +11,7 @@ import {
 import { isUuid, sameOrigin } from "@/lib/pipeline/server";
 import { buildComposeKb, loadPlaybooks } from "@/lib/pipeline/sectorStore";
 import { draftEmail } from "@/lib/ai/composeEmail";
+import { loadComposePrompt, type ComposePromptConfig } from "@/lib/ai/composeStore";
 
 // "Compose email": drafts a per-lead cold email in-app with the Claude API
 // (lib/ai/composeEmail.ts), grounded in the sector knowledge base for the
@@ -76,11 +77,13 @@ function sanitizeLead(input: unknown): ComposeLeadInput | null {
 async function draftForLead(
   lead: ComposeLeadInput,
   kb: string,
+  promptCfg: ComposePromptConfig,
 ): Promise<{ draft: ComposeDraft; ai: boolean }> {
   const base = demoDraft(lead);
   const drafted = await draftEmail(
     { business: lead.name, category: lead.category, website: lead.website },
     kb,
+    promptCfg,
   );
   if (!drafted) return { draft: base, ai: false };
   const subject = drafted.subject.slice(0, MAX_SUBJECT);
@@ -133,6 +136,10 @@ export async function POST(req: Request): Promise<Response> {
   // the matched sector markdown; uploaded KB in Supabase wins over the repo
   // file). Draft sequentially so a batch of same-sector leads reuses the cached
   // KB system prefix instead of paying a cold cache write per lead.
+  // The editable prompt config (model + instructions + message template +
+  // output schema) — loaded once per batch, from the compose_prompt singleton
+  // if saved, else the in-code defaults.
+  const promptCfg = await loadComposePrompt();
   const playbooks = await loadPlaybooks();
   // Memoize the KB per Category so the general company file isn't re-read from
   // disk once per lead, and same-Category leads get a byte-identical (and thus
@@ -150,7 +157,7 @@ export async function POST(req: Request): Promise<Response> {
   const results: ComposeDraft[] = [];
   let drafted = 0;
   for (const lead of leads) {
-    const { draft, ai } = await draftForLead(lead, await kbFor(lead.category));
+    const { draft, ai } = await draftForLead(lead, await kbFor(lead.category), promptCfg);
     results.push(draft);
     if (ai) drafted += 1;
   }

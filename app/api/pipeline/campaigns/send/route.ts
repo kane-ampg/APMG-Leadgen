@@ -1,6 +1,7 @@
 import {
   bestEmail,
   ensureLinkToken,
+  htmlToText,
   isEmail,
   MAX_RECIPIENTS,
   renderBody,
@@ -16,9 +17,14 @@ import { resolveSectorForCategory } from "@/lib/pipeline/sectors";
 // is rewritten to the attribution hook /t/<leadId>?c=<campaign> (app/t/[id]),
 // so a click flips the lead's "Engaged" badge in the Sales queue. Runs on Node.
 //
-// Delivery: when N8N_CAMPAIGN_WEBHOOK_URL is set we POST the rendered messages
-// to that n8n webhook (the "Send a message" Gmail node); otherwise we simulate a
+// Delivery: when N8N_CAMPAIGN_WEBHOOK_URL is set we POST the messages to that
+// n8n webhook (the "Send a message" Gmail node); otherwise we simulate a
 // successful send (demo mode), mirroring the CSV importer.
+//
+// Webhook payload: { campaign, messages: [{ to, leadId, subject, text, attachment? }] }.
+// `text` is the PLAIN-TEXT body (HTML flattened via htmlToText) — the Gmail node
+// owns all formatting. The tracked CTA link is kept inline as "label (url)" so a
+// click still hits /t/<lead> and attributes to the campaign.
 //
 // SECURITY — TODO before exposing publicly: like the other pipeline routes this
 // has only a same-origin (CSRF) floor, NOT real auth. The UI gates the action
@@ -164,11 +170,15 @@ export async function POST(req: Request): Promise<Response> {
   const messages = recipients.map((r) => {
     const sector = resolveSectorForCategory(r.category, playbooks);
     const attachmentUrl = sector?.pdf ? playbookPdfUrl(sector) : null;
+    // Render the merged body, then flatten to plain text for the webhook — the
+    // n8n Gmail node owns formatting. The tracked CTA link survives inline as
+    // "label (url)" so a click is still attributed to /t/<lead>.
+    const html = renderBody(r.html ?? bodyHtml, { business: r.business, link: trackedLink(base, r.id, campaign) });
     return {
       to: r.email,
       leadId: r.id,
       subject: renderSubject(r.subject ?? subject, { business: r.business }),
-      html: renderBody(r.html ?? bodyHtml, { business: r.business, link: trackedLink(base, r.id, campaign) }),
+      text: htmlToText(html),
       // Omitted (undefined → dropped by JSON.stringify) when no PDF applies.
       attachment: attachmentUrl && sector?.pdf ? { url: attachmentUrl, filename: sector.pdf.name } : undefined,
     };

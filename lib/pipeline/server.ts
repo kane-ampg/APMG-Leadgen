@@ -206,11 +206,12 @@ export function publicObjectUrl(bucket: string, path: string): string | null {
 }
 
 /** Upsert an object into a Storage bucket with the service role. `data` is the
- *  raw bytes — pass `await file.arrayBuffer()` from an upload route. */
+ *  raw bytes — pass `await file.arrayBuffer()` from an upload route, or a
+ *  Uint8Array (e.g. Ghostscript-compressed PDF bytes). */
 export async function uploadObject(
   bucket: string,
   path: string,
-  data: ArrayBuffer,
+  data: ArrayBuffer | Uint8Array,
   contentType: string,
 ): Promise<"ok" | "demo" | "error"> {
   const target = supabaseTarget();
@@ -225,7 +226,9 @@ export async function uploadObject(
         "x-upsert": "true",
         "cache-control": "3600",
       },
-      body: new Blob([data], { type: contentType }),
+      // Cast: both ArrayBuffer and Uint8Array are valid BlobParts at runtime;
+      // the union widens `buffer` to ArrayBufferLike which the DOM lib rejects.
+      body: new Blob([data as BlobPart], { type: contentType }),
     });
     if (res.ok) return "ok";
     const detail = await res.text().catch(() => "");

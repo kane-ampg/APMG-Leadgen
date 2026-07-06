@@ -9,6 +9,7 @@ import { ClickPing } from "./ClickPing";
 import { CommandBar } from "./CommandBar";
 import { ClosedDealsPage } from "./ClosedDealsPage";
 import { ComingSoon } from "./ComingSoon";
+import { ComposerConfigPage } from "./ComposerConfigPage";
 import { IntegrationsPage } from "./IntegrationsPage";
 import { MobileHeader } from "./MobileHeader";
 import { OverviewPage } from "./OverviewPage";
@@ -16,6 +17,7 @@ import { LeadsPage } from "./LeadsPage";
 import { PipelinePage } from "./PipelinePage";
 import { SalesPage } from "./SalesPage";
 import { SectorPlaybooksPage } from "./SectorPlaybooksPage";
+import { ServicesPortal } from "./ServicesPortal";
 import { Sidebar } from "./Sidebar";
 import { TelemetryInspector } from "./TelemetryInspector";
 
@@ -96,7 +98,9 @@ export function DashboardShell() {
                 transition={{ duration: reduce ? 0 : 0.26, ease: [0.22, 1, 0.36, 1] }}
                 className="min-h-full"
               >
-                {activeTab === "overview" ? (
+                {activeTab === "services" ? (
+                  <ServicesPortal />
+                ) : activeTab === "overview" ? (
                   <OverviewPage />
                 ) : activeTab === "pipeline" ? (
                   <PipelinePage />
@@ -110,6 +114,8 @@ export function DashboardShell() {
                   <IntegrationsPage />
                 ) : activeTab === "playbooks" ? (
                   <SectorPlaybooksPage />
+                ) : activeTab === "composer" ? (
+                  <ComposerConfigPage />
                 ) : (
                   <ComingSoon tab={activeTab} />
                 )}

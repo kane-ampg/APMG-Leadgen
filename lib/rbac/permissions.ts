@@ -7,6 +7,7 @@
  */
 export const PERMISSIONS = {
   "overview.view": "View the overview dashboard",
+  "services.view": "View the customer services portal",
   "pipeline.view": "View the lead pipeline",
   "pipeline.import": "Import leads from a CSV",
   "sources.view": "View lead sources",
@@ -16,6 +17,7 @@ export const PERMISSIONS = {
   "integrations.manage": "Create, pause, and reconnect automations",
   "playbooks.view": "View sector playbooks",
   "playbooks.manage": "Configure sector playbooks (category mapping + attachment PDF)",
+  "composer.view": "View the AI email composer configuration",
   "telemetry.view": "View click telemetry",
   "settings.view": "View settings",
   "settings.manage": "Change settings",

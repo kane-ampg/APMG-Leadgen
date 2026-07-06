@@ -54,15 +54,24 @@ create table if not exists public.app_settings (
 -- is stored in app_settings under key "sector_playbooks". The KB markdown is
 -- inline; the attachment PDF bytes live in the sector-assets Storage bucket
 -- below.
+--
+-- Note: the Email Composer prompt (model + instructions + per-lead message +
+-- output schema) is an overwriteable singleton in its own table — run
+-- supabase/compose-prompt.sql. It overrides the in-code defaults in
+-- lib/ai/composePrompt.ts.
 
 -- ── sector-assets storage bucket ─────────────────────────────────────────────
 -- Public bucket holding the compressed sector portfolio PDFs the Send Campaigns
 -- flow attaches to outreach emails (managed from the Sector Playbooks tab).
 -- Public-read so the n8n send workflow can fetch each PDF by URL and attach it;
 -- writes are server-side only (service role, app/api/sector-playbooks/pdf).
-insert into storage.buckets (id, name, public)
-values ('sector-assets', 'sector-assets', true)
-on conflict (id) do update set public = true;
+-- file_size_limit is bytes. 52,428,800 = 50 MiB — a backstop set just ABOVE the
+-- app's 50 MB-decimal (50,000,000 B) accept cap in app/api/sector-playbooks/pdf,
+-- so the app's clearer 413 error wins instead of an opaque Storage rejection.
+-- (Uploads are Ghostscript-compressed before they land here, so this rarely bites.)
+insert into storage.buckets (id, name, public, file_size_limit)
+values ('sector-assets', 'sector-assets', true, 52428800)
+on conflict (id) do update set public = true, file_size_limit = 52428800;
 
 -- Public read of objects in the bucket (so the attachment URL resolves for n8n).
 drop policy if exists "sector-assets public read" on storage.objects;

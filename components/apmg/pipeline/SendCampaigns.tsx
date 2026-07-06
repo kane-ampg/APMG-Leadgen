@@ -114,7 +114,8 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // ── audience ──
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [folder, setFolder] = useState<string>("all");
+  // folders chosen first, before the leads — leads are scoped to this set
+  const [folderSel, setFolderSel] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
 
   // ── compose ──
@@ -205,7 +206,21 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     });
   }, [targets]);
 
-  // folder options (newest folders first; Ungrouped sinks to the bottom)
+  // keep the audience scoped to the chosen folders — deselecting a folder in
+  // step 1 (or clearing them) drops its picked leads, so nothing hidden is sent
+  useEffect(() => {
+    setPicked((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set<string>();
+      for (const r of targets) {
+        if (r.id && prev.has(r.id) && folderSel.has(r.batch ?? UNGROUPED)) next.add(r.id);
+      }
+      return next.size === prev.size ? prev : next;
+    });
+  }, [folderSel, targets]);
+
+  // folder options (newest folders first; Ungrouped sinks to the bottom) + a
+  // per-folder count of campaignable leads, shown on each chip
   const folders = useMemo(() => {
     const set = new Set<string>();
     for (const r of targets) set.add(r.batch ?? UNGROUPED);
@@ -215,11 +230,33 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       return b.localeCompare(a);
     });
   }, [targets]);
+  const folderCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of targets) {
+      const b = r.batch ?? UNGROUPED;
+      m.set(b, (m.get(b) ?? 0) + 1);
+    }
+    return m;
+  }, [targets]);
+
+  // keep the folder selection valid across refreshes; auto-pick when there's
+  // only one folder so a single-folder account isn't gated behind a chip
+  useEffect(() => {
+    setFolderSel((prev) => {
+      const valid = new Set(folders);
+      let next = new Set([...prev].filter((f) => valid.has(f)));
+      if (next.size === 0 && folders.length === 1) next = new Set(folders);
+      const same = next.size === prev.size && [...next].every((f) => prev.has(f));
+      return same ? prev : next;
+    });
+  }, [folders]);
 
   const term = q.trim().toLowerCase();
+  // leads are scoped to the chosen folders — nothing shows until one is picked
   const visible = useMemo(() => {
+    if (folderSel.size === 0) return [];
     return targets
-      .filter((r) => (folder === "all" ? true : (r.batch ?? UNGROUPED) === folder))
+      .filter((r) => folderSel.has(r.batch ?? UNGROUPED))
       .filter((r) =>
         term
           ? r.name.toLowerCase().includes(term) ||
@@ -227,7 +264,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
             (r.emails ?? []).some((e) => e.toLowerCase().includes(term))
           : true,
       );
-  }, [targets, folder, term]);
+  }, [targets, folderSel, term]);
 
   // the current selection (drives Compose) + how many need a website scrape
   const pickedTargets = useMemo(
@@ -281,6 +318,21 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       setComposeInfo(null);
     }
   }, [picked, composePhase]);
+
+  function toggleFolder(f: string) {
+    setFolderSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(f)) next.delete(f);
+      else next.add(f);
+      return next;
+    });
+  }
+  function selectAllFolders() {
+    setFolderSel(new Set(folders));
+  }
+  function clearFolders() {
+    setFolderSel(new Set());
+  }
 
   function toggle(id: string) {
     setPicked((prev) => {
@@ -537,10 +589,13 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           picked={picked}
           selectedCount={pickedTargets.length}
           scrapeCount={scrapeCount}
-          folder={folder}
           folders={folders}
+          folderSel={folderSel}
+          folderCounts={folderCounts}
           q={q}
-          onFolder={setFolder}
+          onToggleFolder={toggleFolder}
+          onSelectAllFolders={selectAllFolders}
+          onClearFolders={clearFolders}
           onSearch={setQ}
           onToggle={toggle}
           onToggleAll={toggleAll}
@@ -741,10 +796,13 @@ function AudiencePanel({
   picked,
   selectedCount,
   scrapeCount,
-  folder,
   folders,
+  folderSel,
+  folderCounts,
   q,
-  onFolder,
+  onToggleFolder,
+  onSelectAllFolders,
+  onClearFolders,
   onSearch,
   onToggle,
   onToggleAll,
@@ -758,10 +816,13 @@ function AudiencePanel({
   picked: Set<string>;
   selectedCount: number;
   scrapeCount: number;
-  folder: string;
   folders: string[];
+  folderSel: Set<string>;
+  folderCounts: Map<string, number>;
   q: string;
-  onFolder: (v: string) => void;
+  onToggleFolder: (f: string) => void;
+  onSelectAllFolders: () => void;
+  onClearFolders: () => void;
   onSearch: (v: string) => void;
   onToggle: (id: string) => void;
   onToggleAll: () => void;
@@ -769,6 +830,7 @@ function AudiencePanel({
   onContinue: () => void;
   onSwitchToLeads?: () => void;
 }) {
+  const noFolders = folderSel.size === 0;
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -818,59 +880,70 @@ function AudiencePanel({
 
       {load.status === "ready" && targetCount > 0 && (
         <>
-          <div className="flex flex-wrap items-center gap-2">
-            {/* folder filter */}
-            {folders.length > 1 && (
-              <select
-                value={folder}
-                onChange={(e) => onFolder(e.target.value)}
-                data-track="campaign_select_folder"
-                aria-label="Filter by folder"
-                className="h-8 rounded-lg border border-border bg-background px-2.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <option value="all">All folders</option>
-                {folders.map((f) => (
-                  <option key={f} value={f}>
-                    {folderLabel(f)}
-                  </option>
-                ))}
-              </select>
-            )}
-
-            {/* search */}
-            <div className="relative w-full max-w-xs">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
-              <input
-                type="text"
-                value={q}
-                onChange={(e) => onSearch(e.target.value)}
-                placeholder="Search leads…"
-                aria-label="Search leads"
-                data-track="campaign_search"
-                className="h-8 w-full rounded-lg border border-border bg-background pl-8 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              {q && (
-                <button
-                  type="button"
-                  onClick={() => onSearch("")}
-                  aria-label="Clear search"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  <X className="h-3.5 w-3.5" aria-hidden />
-                </button>
-              )}
-            </div>
-
-            <span className="ml-auto font-mono text-[10.5px] text-muted-foreground">
-              <span className="tnum text-foreground">{selectedCount.toLocaleString("en-US")}</span> selected
-            </span>
-          </div>
-
-          <LeadsTableView
-            rows={visible}
-            selection={{ selected: picked, onToggle, onToggleAll }}
-            emptyHint={q ? `No leads match “${q.trim()}”.` : "No leads in this folder."}
+          {/* Step 1 — pick the folders to campaign, before the leads */}
+          <FolderChooser
+            folders={folders}
+            folderSel={folderSel}
+            folderCounts={folderCounts}
+            onToggleFolder={onToggleFolder}
+            onSelectAll={onSelectAllFolders}
+            onClear={onClearFolders}
           />
+
+          {/* Step 2 — pick leads within the chosen folders */}
+          {noFolders ? (
+            <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-background/40 px-6 py-10 text-center">
+              <span className="flex h-11 w-11 items-center justify-center rounded-2xl border border-border bg-card text-muted-foreground">
+                <Target className="h-5 w-5" aria-hidden />
+              </span>
+              <p className="text-[13px] font-medium text-foreground">Choose a folder to begin</p>
+              <p className="max-w-xs font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+                Pick one or more folders above — their leads appear here for you to select.
+              </p>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                  Step 2 · Pick leads
+                </span>
+
+                {/* search */}
+                <div className="relative w-full max-w-xs">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" aria-hidden />
+                  <input
+                    type="text"
+                    value={q}
+                    onChange={(e) => onSearch(e.target.value)}
+                    placeholder="Search leads…"
+                    aria-label="Search leads"
+                    data-track="campaign_search"
+                    className="h-8 w-full rounded-lg border border-border bg-background pl-8 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                  {q && (
+                    <button
+                      type="button"
+                      onClick={() => onSearch("")}
+                      aria-label="Clear search"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-3.5 w-3.5" aria-hidden />
+                    </button>
+                  )}
+                </div>
+
+                <span className="ml-auto font-mono text-[10.5px] text-muted-foreground">
+                  <span className="tnum text-foreground">{selectedCount.toLocaleString("en-US")}</span> selected
+                </span>
+              </div>
+
+              <LeadsTableView
+                rows={visible}
+                selection={{ selected: picked, onToggle, onToggleAll }}
+                emptyHint={q ? `No leads match “${q.trim()}”.` : "No leads in the selected folders."}
+              />
+            </>
+          )}
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p
@@ -899,6 +972,90 @@ function AudiencePanel({
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/** Step 1 of the audience — multi-select folder chips. Leads are scoped to the
+ *  chosen folders, so the user picks folders before the leads. */
+function FolderChooser({
+  folders,
+  folderSel,
+  folderCounts,
+  onToggleFolder,
+  onSelectAll,
+  onClear,
+}: {
+  folders: string[];
+  folderSel: Set<string>;
+  folderCounts: Map<string, number>;
+  onToggleFolder: (f: string) => void;
+  onSelectAll: () => void;
+  onClear: () => void;
+}) {
+  const allOn = folders.length > 0 && folders.every((f) => folderSel.has(f));
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+          Step 1 · Choose folders
+        </span>
+        {folders.length > 1 && (
+          <div className="flex items-center gap-3 font-mono text-[10px]">
+            <button
+              type="button"
+              onClick={onSelectAll}
+              disabled={allOn}
+              data-track="campaign_folders_all"
+              className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Select all
+            </button>
+            <button
+              type="button"
+              onClick={onClear}
+              disabled={folderSel.size === 0}
+              data-track="campaign_folders_clear"
+              className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Clear
+            </button>
+          </div>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {folders.map((f) => {
+          const active = folderSel.has(f);
+          return (
+            <button
+              key={f}
+              type="button"
+              onClick={() => onToggleFolder(f)}
+              aria-pressed={active}
+              data-track="campaign_select_folder"
+              className={cn(
+                "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                active
+                  ? "border-primary/50 bg-primary/10 text-foreground"
+                  : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+              )}
+            >
+              <span
+                className={cn(
+                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                  active ? "border-primary bg-primary-solid text-primary-foreground" : "border-border",
+                )}
+              >
+                {active && <Check className="h-3 w-3" aria-hidden />}
+              </span>
+              <span className="max-w-[180px] truncate font-medium">{folderLabel(f)}</span>
+              <span className="tnum font-mono text-[10px] text-muted-foreground">
+                {(folderCounts.get(f) ?? 0).toLocaleString("en-US")}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

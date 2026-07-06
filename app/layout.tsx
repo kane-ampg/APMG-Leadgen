@@ -19,7 +19,7 @@ const heading = Plus_Jakarta_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "APMG Services — Lead Generation",
+  title: "APMG — Lead Gen",
   description:
     "Live lead-generation telemetry for APMG Services: volume, conversion, and cost per lead at a glance.",
 };

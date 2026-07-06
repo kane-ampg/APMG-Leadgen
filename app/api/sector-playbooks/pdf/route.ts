@@ -1,4 +1,5 @@
 import { deleteObject, sameOrigin, SECTOR_ASSETS_BUCKET, uploadObject } from "@/lib/pipeline/server";
+import { compressPdfForGmail } from "@/lib/pipeline/pdfCompress";
 import { loadPlaybooks, savePlaybooks } from "@/lib/pipeline/sectorStore";
 import { isSectorSlug, mergePlaybooks } from "@/lib/pipeline/sectors";
 
@@ -14,12 +15,13 @@ import { isSectorSlug, mergePlaybooks } from "@/lib/pipeline/sectors";
 // once auth lands.
 export const runtime = "nodejs";
 
-// Gmail caps a message at ~25 MB measured on the BASE64-ENCODED MIME payload,
-// which inflates raw bytes by ~33%. Cap the raw PDF at 18 MB *decimal*
-// (18,000,000 B → ~24 MB encoded) so even a maxed upload clears Gmail with
-// headroom for the HTML body — rejected here rather than silently bouncing the
-// outreach email. (The raw APMG portfolios are ~36–40 MB — compress them first.)
-const MAX_PDF_BYTES = 18 * 1000 * 1000;
+// Accept uploads up to 50 MB *decimal* (50,000,000 B) — the Storage bucket's
+// file_size_limit (supabase/schema.sql). Anything over Gmail's ~18 MB raw
+// ceiling (≈25 MB once base64-encoded for the n8n Gmail node) is auto-compressed
+// with Ghostscript before it's stored (see compressPdfForGmail), so the object
+// that n8n attaches stays under Gmail's cap. The 50 MB gate is just the upper
+// bound on what we'll accept to compress.
+const MAX_PDF_BYTES = 50 * 1000 * 1000;
 
 function persistError(result: "demo" | "missing-table" | "error"): Response {
   if (result === "demo") {
@@ -78,9 +80,14 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ ok: false, error: "Unknown sector." }, { status: 400 });
   }
 
+  // Shrink oversized PDFs under Gmail's cap before storing (Ghostscript). Small
+  // files pass through untouched; if Ghostscript is missing the original is kept
+  // and `underGmailLimit` is false so we can warn the operator.
+  const raw = await file.arrayBuffer();
+  const compressed = await compressPdfForGmail(raw);
+
   const objectPath = `${slug}.pdf`;
-  const bytes = await file.arrayBuffer();
-  const uploaded = await uploadObject(SECTOR_ASSETS_BUCKET, objectPath, bytes, "application/pdf");
+  const uploaded = await uploadObject(SECTOR_ASSETS_BUCKET, objectPath, compressed.bytes, "application/pdf");
   if (uploaded === "demo") {
     return Response.json({ ok: false, error: "Connect Supabase to upload attachment PDFs." }, { status: 409 });
   }
@@ -94,14 +101,23 @@ export async function POST(req: Request): Promise<Response> {
   target.pdf = {
     path: objectPath,
     name: file.name.slice(0, 200),
-    size: file.size,
+    // Store the size we actually uploaded (post-compression) — that's what n8n
+    // attaches and what the UI shows.
+    size: compressed.size,
     uploadedAt: new Date().toISOString(),
   };
 
   const result = await savePlaybooks(mergePlaybooks(playbooks));
   if (result !== "ok") return persistError(result);
 
-  return Response.json({ ok: true });
+  return Response.json({
+    ok: true,
+    originalSize: compressed.originalSize,
+    storedSize: compressed.size,
+    compression: compressed.status,
+    quality: compressed.quality ?? null,
+    underGmailLimit: compressed.underGmailLimit,
+  });
 }
 
 export async function DELETE(req: Request): Promise<Response> {

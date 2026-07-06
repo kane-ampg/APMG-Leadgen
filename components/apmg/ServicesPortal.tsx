@@ -97,48 +97,50 @@ export function ServicesPortal() {
     <div className="flex min-h-full flex-col px-4 py-5 sm:px-6">
       {/* ── Hero over the APMG background image ───────────────────────────── */}
       <Reveal y={6}>
-        <section className="overflow-hidden rounded-2xl bg-card ring-1 ring-foreground/10">
-          {/* full, uncropped banner — the whole 1938×899 image fits inside */}
-          <div className="relative">
-            <Image
-              src={heroBg}
-              alt=""
-              priority
-              sizes="100vw"
-              placeholder="blur"
-              className="h-auto w-full"
-            />
-            {/* bottom scrim so the white logo reads over the photo */}
-            <div
-              aria-hidden
-              className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/70 via-black/20 to-transparent"
-            />
+        <section className="relative h-64 overflow-hidden rounded-2xl bg-black ring-1 ring-foreground/10 sm:h-80">
+          {/* fixed placeholder; the WHOLE image is fitted (contained) inside it */}
+          <Image
+            src={heroBg}
+            alt=""
+            fill
+            priority
+            sizes="100vw"
+            placeholder="blur"
+            className="object-contain object-top"
+          />
+          {/* bottom-weighted scrim: dark lower band for the overlay, clear photo up top */}
+          <div
+            aria-hidden
+            className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/25 to-transparent"
+          />
+          <div
+            aria-hidden
+            className="absolute inset-0 bg-gradient-to-r from-primary/15 via-transparent to-transparent"
+          />
+
+          <div className="absolute inset-x-0 bottom-0 flex flex-col gap-2 p-5 sm:gap-3 sm:p-8">
             <Image
               src={brandLogo}
               alt="APMG"
               width={240}
               height={184}
-              className="absolute bottom-3 left-4 h-14 w-auto drop-shadow-[0_2px_12px_rgba(0,0,0,0.85)] sm:bottom-6 sm:left-7 sm:h-24"
+              className="h-11 w-auto self-start drop-shadow-[0_2px_12px_rgba(0,0,0,0.9)] sm:h-20"
             />
-          </div>
-
-          {/* copy below the image (editorial §17.8) */}
-          <div className="flex flex-col gap-3 p-6 sm:p-8">
-            <span className="inline-flex w-fit items-center gap-2 rounded-full border border-primary/20 bg-accent px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-primary">
-              <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-primary" />
+            <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/20 bg-black/40 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-white backdrop-blur-sm">
+              <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_8px_2px_hsl(var(--primary)/0.7)]" />
               APMG Services
             </span>
-            <h1 className="font-heading text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+            <h1 className="max-w-2xl font-heading text-xl font-bold tracking-tight text-white sm:text-4xl">
               Our Services
             </h1>
-            <p className="max-w-xl text-sm leading-relaxed text-muted-foreground">
+            <p className="max-w-xl text-xs leading-relaxed text-white/85 sm:text-base">
               Everything your property needs, looked after by one trusted team. Pick a
               trade below and we&rsquo;ll take it from there.
             </p>
             <a
               href={CONTACT_MAILTO}
               data-track="services_hero_contact"
-              className="mt-1 inline-flex w-fit items-center gap-1.5 rounded-md bg-primary-solid px-3.5 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition-[transform,filter] hover:brightness-110 active:translate-y-px"
+              className="mt-1 inline-flex w-fit items-center gap-1.5 rounded-md bg-white/95 px-3.5 py-2 text-xs font-semibold text-zinc-900 shadow-sm transition-[transform,background-color] hover:bg-white active:translate-y-px"
             >
               Talk to our team
               <ArrowRight className="h-3.5 w-3.5" aria-hidden />

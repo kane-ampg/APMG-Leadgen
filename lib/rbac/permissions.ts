@@ -26,6 +26,8 @@ export const PERMISSIONS = {
   "leads.contact": "Contact a lead (call / email / mark contacted)",
   "leads.close": "Close a lead (won / lost)",
   "sales.view": "View the sales queue of qualified, emailed leads",
+  "enquiries.view": "View portal enquiries and service-interest analytics",
+  "enquiries.manage": "Update the status of portal enquiries",
   "users.manage": "Manage users and roles",
 } as const;
 

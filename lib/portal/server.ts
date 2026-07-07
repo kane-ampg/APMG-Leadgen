@@ -1,0 +1,261 @@
+import { timingSafeEqual } from "node:crypto";
+import { type NextRequest } from "next/server";
+import { isUuid } from "@/lib/pipeline/server";
+
+// Server-only helpers shared by the client-portal API routes (/api/portal/*)
+// and the /t/[id] attribution redirect. Same house rules as lib/pipeline/server:
+// raw PostgREST fetch with the SERVICE ROLE key, server-side only, and every
+// helper degrades to null/false instead of throwing so telemetry can never take
+// a customer-facing surface down.
+
+/** Enquiry workflow states, in lifecycle order. The list is the single source
+ *  of truth for the PATCH validator and the admin status select. */
+export const INQUIRY_STATUSES = ["new", "contacted", "closed"] as const;
+export type InquiryStatus = (typeof INQUIRY_STATUSES)[number];
+
+/** One row bound for public.portal_events (snake_case = the table's columns).
+ *  Only `event` + `props` are required — the attribution/context columns are
+ *  filled in by whichever route builds the row. */
+export interface PortalEventRow {
+  event: string;
+  props: Record<string, string>;
+  view?: string | null;
+  lead_id?: string | null;
+  campaign?: string | null;
+  category?: string | null;
+  visitor_id?: string | null;
+  ua?: string | null;
+  referer?: string | null;
+  /** browser time of the event, ISO string (null when untrusted/absent) */
+  client_ts?: string | null;
+}
+
+/** Client-facing (camelCase) shape of one portal enquiry, as returned by
+ *  GET /api/portal/inquiries and consumed by the admin Enquiries tab. */
+export interface PortalInquiry {
+  id: string;
+  serviceSlug: string;
+  serviceName: string | null;
+  name: string | null;
+  email: string;
+  phone: string | null;
+  message: string | null;
+  leadId: string | null;
+  business: string | null;
+  campaign: string | null;
+  category: string | null;
+  status: InquiryStatus;
+  createdAt: string;
+}
+
+/* ── Lead activity (admin Telemetry tab) — GET /api/portal/lead-activity ──
+   Shared camelCase shapes so the route and the TelemetryPage UI (and its demo
+   dataset in lib/data/leadActivity.ts) agree on one contract. Types only —
+   client code must `import type` these (this module is server-only). */
+
+/** One step in a lead's click trail. `service` / `destination` are lifted out
+ *  of the raw props jsonb server-side so the UI never touches event props. */
+export interface LeadActivityEvent {
+  /** raw event name, e.g. "attribution_click", "portal_service_open" */
+  event: string;
+  /** service slug from props.service (portal_service_open / portal_inquiry) */
+  service: string | null;
+  /** redirect target from props.destination (attribution_click) — lets the UI
+   *  tell a PDF download apart from a plain email-link click */
+  destination: string | null;
+  /** server-side created_at, ISO */
+  ts: string;
+}
+
+/** Funnel tallies for one lead. Counted over the whole fetched event window —
+ *  the visible `events` timeline is capped separately — and `inquiries` counts
+ *  the server-canonical `portal_inquiry` rows only (never the client-side
+ *  `portal_inquiry_submit` duplicate). */
+export interface LeadActivityCounts {
+  emailClicks: number;
+  portalViews: number;
+  serviceOpens: number;
+  inquiries: number;
+}
+
+/** Everything one attributed lead (someone who clicked the tracked outreach
+ *  link) did across the portal, ready to render as a timeline row. */
+export interface LeadActivity {
+  leadId: string;
+  /** leads.name at read time; null when the lead has been deleted/reimported */
+  business: string | null;
+  /** sector: denormalized event category first (survives lead deletion),
+   *  falling back to the live leads row */
+  category: string | null;
+  /** most recent non-null campaign slug seen on this lead's events */
+  campaign: string | null;
+  firstSeen: string;
+  lastSeen: string;
+  /** chronological ASC; capped to the MOST RECENT 50 events */
+  events: LeadActivityEvent[];
+  counts: LeadActivityCounts;
+}
+
+/** Aggregate block for portal visitors with NO attribution cookie (typed the
+ *  URL, forwarded link, cookie expired…) — too anonymous for a timeline each,
+ *  still worth a headline count. */
+export interface AnonymousPortalActivity {
+  /** distinct non-null visitor_id values (localStorage id from the client) */
+  visitors: number;
+  /** portal-relevant anonymous events in the window */
+  events: number;
+  /** most-opened service cards, desc, top 6 */
+  topServices: Array<{ service: string; opens: number }>;
+}
+
+/** Full GET /api/portal/lead-activity response. `needsMigration` rides along
+ *  with mode "demo" when the portal tables don't exist yet, so the UI can say
+ *  "run supabase/portal-telemetry.sql" instead of showing demo data silently. */
+export interface LeadActivityResponse {
+  ok: boolean;
+  mode: "live" | "demo";
+  needsMigration?: boolean;
+  error?: string;
+  leads: LeadActivity[];
+  anonymous: AnonymousPortalActivity;
+}
+
+/** Header the admin Enquiries tab sends its access key in. */
+export const PORTAL_ADMIN_KEY_HEADER = "x-portal-admin-key";
+
+/**
+ * Shared-secret gate for the enquiry listing/status endpoints until real auth
+ * lands. The listing contains visitor names, emails and phone numbers, and the
+ * portal deliberately sends external strangers to this origin — so PII reads
+ * must NOT ship publicly behind the sameOrigin (CSRF-only) floor.
+ *
+ * Deny-by-default: when PORTAL_ADMIN_KEY is unset the gate REFUSES live-mode
+ * access rather than silently opening up (demo mode has no stored PII and is
+ * handled by the callers before this check). Comparison is constant-time.
+ */
+export function portalAdminAuthorized(req: NextRequest | Request): boolean {
+  const expected = process.env.PORTAL_ADMIN_KEY;
+  if (!expected) return false;
+  const supplied = req.headers.get(PORTAL_ADMIN_KEY_HEADER) ?? "";
+  const a = Buffer.from(supplied);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/** Longest campaign slug we'll store — anything beyond this is a crafted URL,
+ *  not a real campaign name. */
+const MAX_CAMPAIGN_LEN = 120;
+
+/**
+ * Read the attribution cookies dropped by /t/[id]: `apmg_ref` (the lead uuid,
+ * httpOnly) and `apmg_ref_campaign`. Parsed straight off the Cookie header so
+ * it works for both NextRequest and the plain Request the route handlers get.
+ * The lead id is only trusted when it's a well-formed uuid — the cookie value
+ * ends up interpolated into PostgREST filters downstream.
+ */
+export function readAttribution(req: NextRequest | Request): {
+  leadId: string | null;
+  campaign: string | null;
+} {
+  const header = req.headers.get("cookie") ?? "";
+  let leadId: string | null = null;
+  let campaign: string | null = null;
+
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    const name = part.slice(0, eq).trim();
+    if (name !== "apmg_ref" && name !== "apmg_ref_campaign") continue;
+
+    let value = part.slice(eq + 1).trim();
+    try {
+      value = decodeURIComponent(value); // cookies.set percent-encodes values
+    } catch {
+      /* malformed escape — keep the raw value */
+    }
+
+    if (name === "apmg_ref") {
+      if (isUuid(value)) leadId = value;
+    } else if (value) {
+      campaign = value.slice(0, MAX_CAMPAIGN_LEN);
+    }
+  }
+
+  return { leadId, campaign };
+}
+
+/**
+ * Fetch the lead a visitor was attributed to, for denormalizing name/category
+ * onto telemetry rows (leads get reimported/deleted, so we snapshot at insert
+ * time instead of joining). Null on ANY miss/error — attribution enrichment is
+ * best-effort and must never fail a request.
+ */
+export async function lookupLead(
+  base: string,
+  key: string,
+  leadId: string,
+): Promise<{ name: string | null; category: string | null } | null> {
+  if (!isUuid(leadId)) return null; // belt & braces: never interpolate a non-uuid
+  try {
+    const res = await fetch(
+      `${base}/rest/v1/leads?id=eq.${encodeURIComponent(leadId)}&select=name,category&limit=1`,
+      {
+        headers: { apikey: key, Authorization: `Bearer ${key}` },
+        cache: "no-store",
+      },
+    );
+    if (!res.ok) return null;
+    const rows = (await res.json().catch(() => [])) as Array<{
+      name?: unknown;
+      category?: unknown;
+    }>;
+    const row = Array.isArray(rows) ? rows[0] : undefined;
+    if (!row) return null;
+    return {
+      name: typeof row.name === "string" && row.name ? row.name : null,
+      category: typeof row.category === "string" && row.category ? row.category : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Insert fully-built rows into portal_events. Returns false (and logs) on any
+ * failure — callers decide whether that matters (the beacon sink shrugs, the
+ * enquiry route treats its canonical event as best-effort).
+ */
+export async function insertPortalEvents(
+  base: string,
+  key: string,
+  rows: PortalEventRow[],
+): Promise<boolean> {
+  if (rows.length === 0) return true;
+  try {
+    const res = await fetch(`${base}/rest/v1/portal_events`, {
+      method: "POST",
+      headers: {
+        apikey: key,
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify(rows),
+    });
+    if (res.ok) return true;
+    const detail = await res.text().catch(() => "");
+    console.error(`[portal] portal_events insert ${res.status}:`, detail.slice(0, 500));
+    return false;
+  } catch (e) {
+    console.error("[portal] portal_events insert failed:", e);
+    return false;
+  }
+}
+
+/** True when a PostgREST error means a portal table doesn't exist yet — i.e.
+ *  supabase/portal-telemetry.sql hasn't been run. The read routes degrade to
+ *  demo mode on this so the admin page shows the "run the migration" banner
+ *  instead of a hard error. */
+export function isMissingPortalTable(status: number, detail: string): boolean {
+  return status === 404 || /find the table|PGRST205/i.test(detail);
+}

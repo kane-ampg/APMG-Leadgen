@@ -41,6 +41,9 @@ export const ROLES: Record<Role, RoleDef> = {
       "leads.contact",
       "leads.close",
       "leads.export",
+      // Portal enquiries are inbound qualified leads — reps triage them too.
+      "enquiries.view",
+      "enquiries.manage",
     ],
   },
 };

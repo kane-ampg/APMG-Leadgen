@@ -31,6 +31,12 @@ export interface TelemetryEvent {
 const ENDPOINT = process.env.NEXT_PUBLIC_TELEMETRY_ENDPOINT;
 const STORAGE_KEY = "apmg-telemetry-log";
 const MAX_EVENTS = 100; // ring buffer cap for the local log
+/** Server-side cap per POST (MAX_EVENTS_PER_POST in /api/portal/events).
+ *  Flushing more than this would have the tail silently discarded by the
+ *  sink — e.g. after an outage the retry queue can hold up to MAX_EVENTS —
+ *  so flush() ships at most one chunk of this size and leaves the rest
+ *  queued for the next interval tick. */
+const MAX_BATCH = 50;
 const FLUSH_INTERVAL = 4000;
 
 /** Stable reference for the SSR/initial-hydration snapshot so
@@ -77,6 +83,30 @@ function persist() {
 
 function uid() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+const VISITOR_KEY = "apmg-visitor-id";
+
+/**
+ * Anonymous, persistent visitor id so the portal funnel can count unique
+ * visitors across sessions (portal_events.visitor_id). Minted lazily on the
+ * client with the same uid() the events use and parked in localStorage.
+ * Returns "" during SSR or when storage is unavailable so callers can simply
+ * omit it — identification is best-effort, never a hard dependency.
+ */
+export function getVisitorId(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    let id = localStorage.getItem(VISITOR_KEY);
+    if (!id) {
+      id = uid();
+      localStorage.setItem(VISITOR_KEY, id);
+    }
+    return id;
+  } catch {
+    /* storage disabled — the visitor just stays anonymous */
+    return "";
+  }
 }
 
 /** Record a telemetry event. Safe to call from anywhere on the client. */
@@ -132,12 +162,20 @@ function requeue(batch: TelemetryEvent[]) {
   if (queue.length > MAX_EVENTS) queue = queue.slice(-MAX_EVENTS);
 }
 
-/** Ship queued events to the configured endpoint (no-op without one). */
+/** Ship queued events to the configured endpoint (no-op without one).
+ *  Sends at most MAX_BATCH events per call — the sink truncates anything
+ *  beyond its per-POST cap without telling us (sendBeacon can't read
+ *  responses), so oversized queues drain across successive flush ticks
+ *  instead of silently losing their tail. */
 export function flush() {
   if (!ENDPOINT || queue.length === 0) return;
-  const batch = queue;
-  queue = [];
-  const body = JSON.stringify({ source: "apmg-leadgen", events: batch });
+  const batch = queue.slice(0, MAX_BATCH);
+  queue = queue.slice(MAX_BATCH);
+  const body = JSON.stringify({
+    source: "apmg-leadgen",
+    visitorId: getVisitorId() || undefined,
+    events: batch,
+  });
   try {
     const ok =
       typeof navigator.sendBeacon === "function" &&

@@ -4,6 +4,7 @@ import {
   Filter,
   Handshake,
   HardHat,
+  Inbox,
   LayoutDashboard,
   Megaphone,
   PhoneCall,
@@ -21,6 +22,7 @@ export type TabId =
   | "overview"
   | "pipeline"
   | "leads"
+  | "enquiries"
   | "sources"
   | "campaigns"
   | "sales"
@@ -58,6 +60,7 @@ export const NAV: NavSection[] = [
       { id: "overview", label: "Overview", icon: LayoutDashboard, perm: "overview.view" },
       { id: "pipeline", label: "Pipeline", icon: Filter, perm: "pipeline.view" },
       { id: "leads", label: "Leads", icon: Users, perm: "leads.view" },
+      { id: "enquiries", label: "Enquiries", icon: Inbox, perm: "enquiries.view" },
       { id: "sources", label: "Sources", icon: Radio, badge: "6", perm: "sources.view" },
       { id: "campaigns", label: "Campaigns", icon: Megaphone, badge: "4", perm: "campaigns.view" },
     ],
@@ -106,6 +109,7 @@ export const TAB_LABEL: Record<TabId, string> = {
   overview: "Overview",
   pipeline: "Pipeline",
   leads: "Leads",
+  enquiries: "Enquiries",
   sources: "Sources",
   campaigns: "Campaigns",
   sales: "Sales",

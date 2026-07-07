@@ -747,7 +747,7 @@ function buildSteps(phase: Phase, hasFile: boolean, errStep: number | null): Flo
     },
     {
       id: "push",
-      label: "Push to Supabase",
+      label: "Push to Database",
       icon: Database,
       status: s2,
       detail: phase === "confirm" ? "Awaiting save" : detailFor(s2, "Queued", "Writing…", "Stored"),

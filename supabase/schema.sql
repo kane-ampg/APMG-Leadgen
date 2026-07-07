@@ -86,3 +86,9 @@ create policy "sector-assets public read"
 --
 --   alter table public.leads enable row level security;
 --   create policy "read leads" on public.leads for select to anon using (true);
+
+-- ── portal telemetry ─────────────────────────────────────────────────────────
+-- The client-portal tables (portal_events, portal_inquiries) and the
+-- leads.engaged / engaged_at columns behind the Sales-queue "Engaged" badge
+-- live in supabase/portal-telemetry.sql — run that file too when setting up
+-- the services portal and the admin Enquiries tab.

@@ -10,6 +10,7 @@ import { CommandBar } from "./CommandBar";
 import { ClosedDealsPage } from "./ClosedDealsPage";
 import { ComingSoon } from "./ComingSoon";
 import { ComposerConfigPage } from "./ComposerConfigPage";
+import { EnquiriesPage } from "./EnquiriesPage";
 import { IntegrationsPage } from "./IntegrationsPage";
 import { MobileHeader } from "./MobileHeader";
 import { OverviewPage } from "./OverviewPage";
@@ -20,6 +21,7 @@ import { SectorPlaybooksPage } from "./SectorPlaybooksPage";
 import { ServicesPortal } from "./ServicesPortal";
 import { Sidebar } from "./Sidebar";
 import { TelemetryInspector } from "./TelemetryInspector";
+import { TelemetryPage } from "./TelemetryPage";
 
 /**
  * Root shell (ui-standards §1.1): h-dvh overflow-hidden flex → sidebar + main.
@@ -86,7 +88,13 @@ export function DashboardShell() {
             navOpen={navOpen}
             onOpenNav={() => setNavOpen(true)}
           />
-          <CommandBar activeTab={activeTab} onOpenTelemetry={() => setInspectorOpen(true)} />
+          {/* The command bar is internal chrome ("Lead Desk", signal ticker,
+              telemetry). The Our Services tab is the customer-facing portal —
+              that operator identity reads wrong to a client, so it's hidden
+              there for every role (the mobile header stays for navigation). */}
+          {activeTab !== "services" && (
+            <CommandBar activeTab={activeTab} onOpenTelemetry={() => setInspectorOpen(true)} />
+          )}
 
           <div className="min-h-0 flex-1 overflow-y-auto">
             <AnimatePresence mode="wait" initial={false}>
@@ -106,6 +114,8 @@ export function DashboardShell() {
                   <PipelinePage />
                 ) : activeTab === "leads" ? (
                   <LeadsPage />
+                ) : activeTab === "enquiries" ? (
+                  <EnquiriesPage />
                 ) : activeTab === "sales" ? (
                   <SalesPage />
                 ) : activeTab === "closed" ? (
@@ -116,6 +126,8 @@ export function DashboardShell() {
                   <SectorPlaybooksPage />
                 ) : activeTab === "composer" ? (
                   <ComposerConfigPage />
+                ) : activeTab === "telemetry" ? (
+                  <TelemetryPage />
                 ) : (
                   <ComingSoon tab={activeTab} />
                 )}

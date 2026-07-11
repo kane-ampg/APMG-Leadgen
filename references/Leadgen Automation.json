@@ -207,7 +207,7 @@
         "sendTo": "={{ $json.best_contact_email }}",
         "subject": "A quick idea to bring you more customers",
         "emailType": "html",
-        "message": "=<p>Hi there,</p><p>We help businesses like yours get a steady stream of qualified, ready-to-buy customers — without the busywork.</p><p><a href=\"https://apmg-app.vercel.app/t/{{ encodeURIComponent($json.best_contact_email) }}?c=outreach-2026\">See how it works &rarr;</a></p><p>Not interested? No problem — just ignore this email.</p><p>&mdash; The APMG Services team</p>",
+        "message": "=<p>Hi there,</p><p>We help businesses like yours get a steady stream of qualified, ready-to-buy customers — without the busywork.</p><p><a href=\"https://apmgmaintenance.com.au/t/{{ encodeURIComponent($json.best_contact_email) }}?c=outreach-2026\">See how it works &rarr;</a></p><p>Not interested? No problem — just ignore this email.</p><p>&mdash; The APMG Services team</p>",
         "options": {
           "appendAttribution": false
         }

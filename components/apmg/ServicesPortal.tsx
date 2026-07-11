@@ -141,7 +141,7 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
     <div className="flex min-h-full flex-col px-4 py-5 sm:px-6">
       {/* ── Hero over the APMG background image ───────────────────────────── */}
       <Reveal y={6}>
-        <section className="relative h-64 overflow-hidden rounded-2xl bg-black ring-1 ring-foreground/10 sm:h-80">
+        <section className="relative h-[248px] overflow-hidden rounded-2xl bg-black ring-1 ring-foreground/10 sm:h-[310px]">
           {/* fixed placeholder; the WHOLE image is fitted (contained) inside it */}
           <Image
             src={heroBg}
@@ -224,33 +224,8 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
         ))}
       </div>
 
-      {/* ── Friendly closing CTA ─────────────────────────────────────────── */}
-      <Reveal delay={0.16} className="mt-4">
-        <div className="flex flex-col items-start justify-between gap-3 rounded-xl bg-card p-5 ring-1 ring-foreground/10 sm:flex-row sm:items-center">
-          <div>
-            <h3 className="font-heading text-sm font-semibold text-foreground">
-              Not sure where to start?
-            </h3>
-            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              Tell us what you need and our team will point you the right way — one call
-              covers the lot.
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setActive(GENERAL_SERVICE)}
-            data-track={openEvent}
-            data-track-service="general"
-            className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary-solid px-3.5 py-2 text-xs font-semibold text-primary-foreground shadow-sm transition-[transform,filter] hover:brightness-110 active:translate-y-px"
-          >
-            Talk to our team
-            <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-          </button>
-        </div>
-      </Reveal>
-
       {/* ── Where to find us ─────────────────────────────────────────────── */}
-      <Reveal delay={0.2} className="mt-3">
+      <Reveal delay={0.16} className="mt-4">
         <div className="flex flex-col gap-3 rounded-xl bg-card p-5 ring-1 ring-foreground/10 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-primary ring-1 ring-primary/15">

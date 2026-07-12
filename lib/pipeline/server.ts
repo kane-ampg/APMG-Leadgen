@@ -53,6 +53,15 @@ export const SETTING_CAMPAIGN_WEBHOOK = "n8n_campaign_webhook_url";
 export const SETTING_CAMPAIGN_ENABLED = "n8n_campaign_webhook_enabled";
 export const SETTING_COMPOSE_WEBHOOK = "n8n_compose_webhook_url";
 export const SETTING_COMPOSE_ENABLED = "n8n_compose_webhook_enabled";
+/** Enquiry-notification integration: the n8n webhook that emails a landed portal
+ *  enquiry to the operator, plus its on/off toggle. Managed on the Integrations
+ *  tab like the others. NOTE: stored in app_settings (key/value) — no dedicated
+ *  SQL migration needed, since these are single config values. */
+export const SETTING_ENQUIRY_NOTIFY_WEBHOOK = "n8n_enquiry_notify_webhook_url";
+export const SETTING_ENQUIRY_NOTIFY_ENABLED = "n8n_enquiry_notify_webhook_enabled";
+/** app_settings key holding the address enquiry notifications are emailed TO
+ *  (set on the Integrations tab). Passed to the n8n notify workflow as `notifyTo`. */
+export const SETTING_ENQUIRY_NOTIFY_EMAIL = "enquiry_notify_email";
 
 /** app_settings key holding the Sector Playbooks config (JSON): per-sector
  *  category keywords + the uploaded KB markdown. Managed from the Sector
@@ -77,6 +86,14 @@ export const SECTOR_ASSETS_BUCKET = "sector-assets";
  *  rendered outreach messages here for the automation to deliver. */
 export function campaignWebhook(): Promise<WebhookTarget> {
   return resolveWebhook(SETTING_CAMPAIGN_WEBHOOK, SETTING_CAMPAIGN_ENABLED, "N8N_CAMPAIGN_WEBHOOK_URL");
+}
+
+/** Resolve the n8n enquiry-notification webhook (references/APMG Enquiry
+ *  Notification.json). A URL saved from the Integrations tab wins; otherwise the
+ *  N8N_ENQUIRY_NOTIFY_WEBHOOK_URL env var; else demo (no notification is sent).
+ *  The enquiry route POSTs a landed enquiry here so the operator gets emailed. */
+export function enquiryNotifyWebhook(): Promise<WebhookTarget> {
+  return resolveWebhook(SETTING_ENQUIRY_NOTIFY_WEBHOOK, SETTING_ENQUIRY_NOTIFY_ENABLED, "N8N_ENQUIRY_NOTIFY_WEBHOOK_URL");
 }
 
 /** Resolve the n8n compose-email webhook (references/Compose Email Automation.json).

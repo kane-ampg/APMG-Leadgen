@@ -39,9 +39,9 @@ export const PLACEHOLDER_VERSION = "unset";
 export const DEFAULT_LEGAL_DOCS: LegalDocs = {
   version: PLACEHOLDER_VERSION,
   termsHtml:
-    "<p><strong>Placeholder terms — not yet reviewed.</strong> Replace this with your lawyer-reviewed Terms &amp; Conditions on the Legal Documents tab before collecting enquiries.</p>",
+    "<p><strong>Placeholder terms &mdash; not yet reviewed.</strong> Replace this with your lawyer-reviewed Terms &amp; Conditions on the Legal Documents tab before collecting enquiries. Include the registered legal entity and ABN (currently TBC) and reference APMG Services.</p>",
   privacyHtml:
-    "<p><strong>Placeholder privacy policy — not yet reviewed.</strong> Replace this with your lawyer-reviewed Privacy Policy on the Legal Documents tab before collecting enquiries.</p>",
+    "<p><strong>Placeholder privacy policy &mdash; not yet reviewed.</strong> Replace this with your lawyer-reviewed Privacy Policy on the Legal Documents tab before collecting enquiries. It should name APMG Services (and its registered entity + ABN once available), state what personal information is collected and why, that data is stored with Supabase (possibly offshore &mdash; APP 8), retention, and how to contact us at kane@apmgservices.com.au to access, correct, or delete your information.</p>",
   updatedAt: "",
 };
 

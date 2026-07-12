@@ -1,4 +1,12 @@
-import { isUuid, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
+import {
+  isUuid,
+  sameOrigin,
+  supabaseTarget,
+  enquiryNotifyWebhook,
+  readSetting,
+  webhookAuthHeaders,
+  SETTING_ENQUIRY_NOTIFY_EMAIL,
+} from "@/lib/pipeline/server";
 import {
   INQUIRY_STATUSES,
   insertPortalEvents,
@@ -224,7 +232,51 @@ export async function POST(req: Request): Promise<Response> {
     },
   ]);
 
+  // Email the enquiry to the operator's configured notification address via the
+  // n8n Enquiry Notification workflow. Entirely best-effort and fire-and-forget:
+  // it must NEVER delay or fail the customer's thank-you (the enquiry is already
+  // safely stored above). Silently skipped when no notify webhook or no address
+  // is configured. Not awaited into the response path beyond a bounded timeout.
+  void notifyOperator({
+    to: (await readSetting(SETTING_ENQUIRY_NOTIFY_EMAIL)) ?? "",
+    enquiry: {
+      id,
+      service: serviceName ?? service,
+      name,
+      email,
+      phone,
+      message,
+      business: lead?.name ?? null,
+      category: lead?.category ?? null,
+      campaign,
+    },
+  });
+
   return Response.json({ ok: true, mode: "live", id });
+}
+
+/** Fire the enquiry-notification webhook (n8n → Gmail). Best-effort: resolves
+ *  the webhook + toggle, requires a configured `notifyTo` address, and swallows
+ *  every error so a notification problem can never affect the stored enquiry or
+ *  the customer response. Bounded so a hung webhook can't wedge the request. */
+async function notifyOperator(input: {
+  to: string;
+  enquiry: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const to = input.to.trim();
+    if (!to) return; // no address set on the Integrations tab → nothing to do
+    const target = await enquiryNotifyWebhook();
+    if (target.state !== "ok") return; // demo / not configured / toggled off
+    await fetch(target.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...webhookAuthHeaders() },
+      body: JSON.stringify({ notifyTo: to, enquiry: input.enquiry }),
+      signal: AbortSignal.timeout(10_000),
+    });
+  } catch (e) {
+    console.error("[portal/inquiries] enquiry notification failed (non-fatal):", e);
+  }
 }
 
 export async function GET(req: Request): Promise<Response> {

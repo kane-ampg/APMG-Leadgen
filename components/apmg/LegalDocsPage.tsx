@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Check, Loader2, ScrollText, Save, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Check, Eye, Loader2, ScrollText, Save, ShieldAlert } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Footer } from "./Footer";
 import { Reveal } from "./Reveal";
 import { PLACEHOLDER_VERSION } from "@/lib/legal/legalDocs";
+import { COMPANY } from "@/lib/legal/company";
 
 /**
  * Legal Documents (config) — publish the portal's Terms & Conditions and
@@ -44,6 +45,10 @@ export function LegalDocsPage() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
+  /** Which doc the PREVIEW has expanded (mirrors the customer modal), or null. */
+  const [previewDoc, setPreviewDoc] = useState<"terms" | "privacy" | null>(null);
+  /** Preview checkbox state — purely cosmetic, lets you see the ticked look. */
+  const [previewChecked, setPreviewChecked] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -230,6 +235,91 @@ export function LegalDocsPage() {
               placeholder="<p>Paste your lawyer-reviewed Privacy Policy here…</p>"
               className="w-full resize-y rounded-lg border border-input bg-background px-3 py-2 font-mono text-xs leading-relaxed text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
             />
+          </div>
+
+          {/* LIVE PREVIEW — how the consent step looks to a customer in the
+              enquiry modal, using the text CURRENTLY in the editor above (not
+              just the saved version), so you can eyeball wording before you
+              publish. Faithful to ServiceInquiryModal's consent block. */}
+          <div className="space-y-2 pt-2">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+              <Eye className="h-3.5 w-3.5" aria-hidden /> Customer preview
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              This is the consent step shown in the enquiry modal on the portal. The links expand the
+              exact text you&rsquo;ve typed above.
+            </p>
+            {/* Mock modal card */}
+            <div className="mx-auto w-[min(100%,460px)] overflow-hidden rounded-2xl border border-border bg-card shadow-lg">
+              <div className="flex items-center gap-2 border-b border-border px-5 py-3">
+                <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-solid text-primary-foreground">
+                  <ScrollText className="h-4 w-4" aria-hidden />
+                </div>
+                <span className="font-heading text-sm font-semibold text-foreground">
+                  Enquire — Electrical Services
+                </span>
+              </div>
+              <div className="space-y-3 px-5 py-4">
+                <div className="text-[11px] text-muted-foreground">
+                  (name / email / phone / message fields above this)
+                </div>
+                {/* The consent block — mirrors ServiceInquiryModal exactly */}
+                <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+                  <label className="flex cursor-pointer items-start gap-2.5">
+                    <input
+                      type="checkbox"
+                      checked={previewChecked}
+                      onChange={(e) => setPreviewChecked(e.target.checked)}
+                      className="mt-0.5 h-4 w-4 shrink-0 rounded border-input text-primary focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                    <span className="text-[12px] leading-relaxed text-foreground">
+                      I agree to {COMPANY.tradingName}&rsquo;{" "}
+                      <button
+                        type="button"
+                        onClick={() => setPreviewDoc(previewDoc === "terms" ? null : "terms")}
+                        className="font-medium text-primary underline underline-offset-2"
+                      >
+                        Terms &amp; Conditions
+                      </button>{" "}
+                      and{" "}
+                      <button
+                        type="button"
+                        onClick={() => setPreviewDoc(previewDoc === "privacy" ? null : "privacy")}
+                        className="font-medium text-primary underline underline-offset-2"
+                      >
+                        Privacy Policy
+                      </button>
+                      , and to APMG contacting me about my enquiry. Please don&rsquo;t include
+                      sensitive personal information in your message.
+                    </span>
+                  </label>
+                  {previewDoc && (
+                    <div
+                      className="max-h-[36rem] overflow-y-auto rounded-md border border-border bg-background p-4 text-[12px] leading-relaxed text-muted-foreground [&_a]:text-primary [&_a]:underline [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-[13px] [&_h2]:font-semibold [&_h2]:text-foreground [&_h2:first-child]:mt-0 [&_p]:mb-2.5 [&_strong]:text-foreground"
+                      dangerouslySetInnerHTML={{
+                        __html: (previewDoc === "terms" ? termsHtml : privacyHtml) || "<p><em>(empty — type some wording above)</em></p>",
+                      }}
+                    />
+                  )}
+                </div>
+                <div className="flex justify-end">
+                  <span
+                    className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold ${
+                      previewChecked
+                        ? "bg-primary-solid text-primary-foreground"
+                        : "cursor-not-allowed bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    Send enquiry
+                  </span>
+                </div>
+                {!previewChecked && (
+                  <p className="text-right text-[11px] text-muted-foreground">
+                    Send stays disabled until the box is ticked.
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
 
           {saveError && (

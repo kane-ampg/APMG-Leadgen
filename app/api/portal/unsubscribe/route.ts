@@ -1,5 +1,6 @@
 import { isUuid, supabaseTarget } from "@/lib/pipeline/server";
 import { lookupLead, recordUnsubscribe } from "@/lib/portal/server";
+import { senderIdentityLine } from "@/lib/legal/company";
 
 // One-click unsubscribe for outreach email (Spam Act 2003: a functional opt-out
 // is mandatory on commercial email). The branded footer links here as a GET so
@@ -29,6 +30,7 @@ function page(title: string, body: string): Response {
 <tr><td style="height:3px;background:#c8102e;font-size:0;line-height:0;">&nbsp;</td></tr>
 <tr><td style="padding:32px 28px;color:#1a1a1a;font-size:15px;line-height:1.6;">
 <h1 style="font-size:19px;margin:0 0 12px;">${title}</h1>${body}</td></tr>
+<tr><td style="padding:16px 28px;border-top:1px solid #ececec;background:#fafafa;color:#6b7280;font-size:11px;line-height:1.5;">${senderIdentityLine()}</td></tr>
 </table></td></tr></table></body></html>`;
   return new Response(html, {
     status: 200,

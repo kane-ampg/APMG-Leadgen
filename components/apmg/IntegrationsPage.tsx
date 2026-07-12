@@ -46,7 +46,7 @@ const POLL_MS = 15000;
 type LoadState =
   | { status: "loading" }
   | { status: "error"; error: string }
-  | { status: "ready"; mode: string; canPersist: boolean; states: IntegrationState[] };
+  | { status: "ready"; mode: string; canPersist: boolean; states: IntegrationState[]; notifyEmail: string };
 
 function StatusPill({ status }: { status: AutomationStatus }) {
   const s = STATUS[status];
@@ -119,7 +119,7 @@ export function IntegrationsPage() {
     try {
       const res = await fetch("/api/integrations", { cache: "no-store" });
       const data = (await res.json().catch(() => null)) as
-        | { ok?: boolean; mode?: string; canPersist?: boolean; integrations?: IntegrationState[]; error?: string }
+        | { ok?: boolean; mode?: string; canPersist?: boolean; integrations?: IntegrationState[]; notifyEmail?: string; error?: string }
         | null;
       if (!mountedRef.current) return;
       if (!res.ok || !data?.ok) {
@@ -131,6 +131,7 @@ export function IntegrationsPage() {
         mode: data.mode ?? "live",
         canPersist: data.canPersist ?? false,
         states: data.integrations ?? [],
+        notifyEmail: data.notifyEmail ?? "",
       });
     } catch {
       if (mountedRef.current) setLoad({ status: "error", error: "Network error loading integrations." });
@@ -250,20 +251,138 @@ export function IntegrationsPage() {
       )}
 
       {load.status === "ready" && (
-        <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
-          {integrations.map((integration, i) => (
-            <Reveal key={integration.id} delay={0.08 + 0.04 * i} className="h-full">
-              <AutomationCard
-                integration={integration}
-                canPersist={canPersist}
-                onSaved={() => fetchState({ quiet: true })}
-              />
-            </Reveal>
-          ))}
-        </div>
+        <>
+          <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {integrations.map((integration, i) => (
+              <Reveal key={integration.id} delay={0.08 + 0.04 * i} className="h-full">
+                <AutomationCard
+                  integration={integration}
+                  canPersist={canPersist}
+                  onSaved={() => fetchState({ quiet: true })}
+                />
+              </Reveal>
+            ))}
+          </div>
+          <Reveal delay={0.2} className="mt-3">
+            <NotifyEmailPanel
+              initial={load.notifyEmail}
+              canPersist={canPersist}
+              onSaved={() => fetchState({ quiet: true })}
+            />
+          </Reveal>
+        </>
       )}
 
       <Footer />
+    </div>
+  );
+}
+
+/** Where portal enquiries are emailed to. A single global setting (app_settings
+ *  key `enquiry_notify_email`) consumed by the enquiry route + the Enquiry
+ *  Notification n8n workflow. Blank clears it (no notifications sent). */
+function NotifyEmailPanel({
+  initial,
+  canPersist,
+  onSaved,
+}: {
+  initial: string;
+  canPersist: boolean;
+  onSaved: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [savedFlash, setSavedFlash] = useState(false);
+  const flashRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Re-seed if a poll brings a newer saved value while we're not editing.
+  useEffect(() => {
+    setValue(initial);
+  }, [initial]);
+  useEffect(() => () => {
+    if (flashRef.current) clearTimeout(flashRef.current);
+  }, []);
+
+  const trimmed = value.trim();
+  const dirty = trimmed !== initial.trim();
+  const validish = trimmed === "" || /^[^\s@?&=#]+@[^\s@?&=#]+\.[^\s@?&=#]+$/.test(trimmed);
+
+  async function save() {
+    setError(null);
+    setBusy(true);
+    try {
+      const res = await fetch("/api/integrations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notifyEmail: trimmed }),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!res.ok || !data?.ok) {
+        setError(data?.error ?? `Save failed (${res.status}).`);
+        return;
+      }
+      setSavedFlash(true);
+      if (flashRef.current) clearTimeout(flashRef.current);
+      flashRef.current = setTimeout(() => setSavedFlash(false), 1800);
+      onSaved();
+    } catch {
+      setError("Network error — couldn't save.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="flex items-start gap-3">
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-primary ring-1 ring-primary/15">
+          <Webhook className="h-4 w-4" aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 className="font-heading text-sm font-semibold text-foreground">
+            Enquiry notification email
+          </h3>
+          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+            Every portal enquiry is emailed here (via the Enquiry Notification automation above).
+            Leave blank to send no notifications.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+            <input
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              placeholder="you@company.com.au"
+              disabled={busy || !canPersist}
+              className="h-9 w-full flex-1 rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+            />
+            <Button
+              size="sm"
+              onClick={save}
+              disabled={busy || !canPersist || !dirty || !validish}
+              className="gap-1.5 bg-primary-solid text-primary-foreground hover:bg-primary-solid/90"
+            >
+              {savedFlash ? <Check className="h-3.5 w-3.5" aria-hidden /> : null}
+              {savedFlash ? "Saved" : busy ? "Saving…" : "Save"}
+            </Button>
+          </div>
+          {!canPersist && (
+            <p className="mt-2 text-[11px] text-amber-500">
+              Connect Supabase to save this here.
+            </p>
+          )}
+          {!validish && (
+            <p className="mt-2 text-[11px] text-primary">Enter a valid email address.</p>
+          )}
+          {error && (
+            <p className="mt-2 flex items-center gap-1 text-[11px] text-destructive">
+              <AlertTriangle className="h-3 w-3" aria-hidden /> {error}
+            </p>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

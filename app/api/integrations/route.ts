@@ -1,5 +1,15 @@
 import { INTEGRATIONS, type IntegrationState } from "@/lib/data/integrations";
-import { deleteSetting, readSetting, sameOrigin, supabaseTarget, writeSetting } from "@/lib/pipeline/server";
+import {
+  deleteSetting,
+  readSetting,
+  sameOrigin,
+  supabaseTarget,
+  writeSetting,
+  SETTING_ENQUIRY_NOTIFY_EMAIL,
+} from "@/lib/pipeline/server";
+
+/** Same address shape the enquiry validator + n8n Gmail node accept. */
+const EMAIL_RE = /^[^\s@?&=#]+@[^\s@?&=#]+\.[^\s@?&=#]+$/;
 
 // Realtime state + configuration for the app's n8n integrations (Integrations
 // tab). GET resolves each integration's live wiring (a URL saved from this tab
@@ -70,9 +80,11 @@ export async function GET(req: Request): Promise<Response> {
   const supa = supabaseTarget();
   const mode = supa.state === "ok" ? "live" : "demo";
   const integrations = await resolveState();
+  // Notification address enquiries are emailed to (Enquiry Notification card).
+  const notifyEmail = (await readSetting(SETTING_ENQUIRY_NOTIFY_EMAIL)) ?? "";
   // In demo mode saved overrides can't persist — the UI shows this so a save
   // doesn't silently no-op.
-  return Response.json({ ok: true, mode, canPersist: supa.state === "ok", integrations });
+  return Response.json({ ok: true, mode, canPersist: supa.state === "ok", integrations, notifyEmail });
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -87,6 +99,45 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ ok: false, error: "Invalid JSON body." }, { status: 400 });
   }
   const b = (body ?? {}) as Record<string, unknown>;
+
+  // Global (not per-integration) setting: the enquiry notification address.
+  // Handled before the integration lookup so it isn't rejected as "unknown
+  // integration". A blank value clears it (notifications fall back to demo).
+  if ("notifyEmail" in b) {
+    const raw = typeof b.notifyEmail === "string" ? b.notifyEmail.trim() : "";
+    if (raw === "") {
+      const result = await deleteSetting(SETTING_ENQUIRY_NOTIFY_EMAIL);
+      if (result === "demo") {
+        return Response.json({ ok: false, error: "Nothing to clear (Supabase not connected)." }, { status: 409 });
+      }
+      if (result !== "ok") {
+        return Response.json({ ok: false, error: "Couldn't clear the notification email." }, { status: 502 });
+      }
+    } else {
+      if (raw.length > 200 || !EMAIL_RE.test(raw)) {
+        return Response.json({ ok: false, error: "Enter a valid email address." }, { status: 400 });
+      }
+      const result = await writeSetting(SETTING_ENQUIRY_NOTIFY_EMAIL, raw);
+      if (result === "demo") {
+        return Response.json(
+          { ok: false, error: "Connect Supabase to save the notification email here." },
+          { status: 409 },
+        );
+      }
+      if (result === "missing-table") {
+        return Response.json(
+          { ok: false, needsMigration: true, error: "Run supabase/schema.sql to create the app_settings table." },
+          { status: 422 },
+        );
+      }
+      if (result !== "ok") {
+        return Response.json({ ok: false, error: "Couldn't save the notification email." }, { status: 502 });
+      }
+    }
+    const integrations = await resolveState();
+    const notifyEmail = (await readSetting(SETTING_ENQUIRY_NOTIFY_EMAIL)) ?? "";
+    return Response.json({ ok: true, mode: "live", canPersist: true, integrations, notifyEmail });
+  }
 
   const id = typeof b.id === "string" ? b.id : "";
   const meta = INTEGRATIONS.find((i) => i.id === id);

@@ -82,6 +82,18 @@ export const INTEGRATIONS: IntegrationMeta[] = [
       "Confirming a send in Pipeline → Send Campaigns POSTs the rendered outreach emails here. The automation sends each message via Gmail (the email copy is grounded per category by the Sector Playbooks knowledge base at compose time).",
     trigger: "webhook",
     webhookPath: "/webhook/campaign-send",
-    workflowFile: "Campaign Send Automation.json",
+    workflowFile: "APMG Campaign Send (clean).json",
+  },
+  {
+    id: "enquiry-notify",
+    settingKey: "n8n_enquiry_notify_webhook_url",
+    enabledKey: "n8n_enquiry_notify_webhook_enabled",
+    envVar: "N8N_ENQUIRY_NOTIFY_WEBHOOK_URL",
+    name: "Enquiry Notification",
+    description:
+      "When a customer submits an enquiry on the services portal, the details are emailed to the notification address you set below. Sent via Gmail through n8n.",
+    trigger: "webhook",
+    webhookPath: "/webhook/enquiry-notify",
+    workflowFile: "APMG Enquiry Notification.json",
   },
 ];

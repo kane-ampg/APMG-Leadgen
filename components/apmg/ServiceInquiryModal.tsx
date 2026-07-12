@@ -6,6 +6,7 @@ import { AlertTriangle, CircleCheck, Loader2, Send, X, type LucideIcon } from "l
 import { Button } from "@/components/ui/button";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { track } from "@/lib/telemetry";
+import { COMPANY } from "@/lib/legal/company";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 /** The message must say *something* before the send button enables — a bare
@@ -17,8 +18,9 @@ const MIN_MESSAGE = 10;
  *  mailto query params into anyone's mail compose. */
 const EMAIL_RE = /^[^\s@?&=#]+@[^\s@?&=#]+\.[^\s@?&=#]+$/;
 /** Fallback inbox when the API is unreachable — an enquiry must never be lost
- *  just because our storage had a bad moment. */
-const CONTACT_EMAIL = "kane@apmgservices.com.au";
+ *  just because our storage had a bad moment. Single source of truth in
+ *  lib/legal/company.ts so the contact never drifts across surfaces. */
+const CONTACT_EMAIL = COMPANY.contactEmail;
 
 /** Shape shared with ServicesPortal's SERVICES entries and its `general`
  *  pseudo-service (hero / closing CTAs) — structurally identical on purpose. */
@@ -459,7 +461,7 @@ export function ServiceInquiryModal({
                                 className="mt-0.5 h-4 w-4 shrink-0 rounded border-input text-primary focus-visible:ring-2 focus-visible:ring-ring"
                               />
                               <span className="text-[12px] leading-relaxed text-foreground">
-                                I agree to APMG Services&rsquo;{" "}
+                                I agree to {COMPANY.tradingName}&rsquo;{" "}
                                 <button
                                   type="button"
                                   onClick={() => setOpenDoc(openDoc === "terms" ? null : "terms")}
@@ -481,7 +483,7 @@ export function ServiceInquiryModal({
                             </label>
                             {openDoc && legal && (
                               <div
-                                className="max-h-40 overflow-y-auto rounded-md border border-border bg-background p-3 text-[12px] leading-relaxed text-muted-foreground [&_a]:text-primary [&_a]:underline [&_h1]:mb-1 [&_h1]:font-semibold [&_h2]:mb-1 [&_h2]:font-semibold [&_p]:mb-2"
+                                className="max-h-72 overflow-y-auto rounded-md border border-border bg-background p-3.5 text-[12px] leading-relaxed text-muted-foreground [&_a]:text-primary [&_a]:underline [&_h2]:mb-1.5 [&_h2]:mt-3 [&_h2]:text-[13px] [&_h2]:font-semibold [&_h2]:text-foreground [&_h2:first-child]:mt-0 [&_p]:mb-2.5 [&_strong]:text-foreground"
                                 // Operator-authored, lawyer-reviewed policy text
                                 // from the Legal Documents tab (trusted source).
                                 dangerouslySetInnerHTML={{

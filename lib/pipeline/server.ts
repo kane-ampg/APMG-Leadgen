@@ -59,6 +59,13 @@ export const SETTING_COMPOSE_ENABLED = "n8n_compose_webhook_enabled";
  *  Playbooks tab; read by the compose flow to ground the email per sector. */
 export const SETTING_SECTOR_PLAYBOOKS = "sector_playbooks";
 
+/** app_settings key holding the versioned legal documents (JSON): the current
+ *  Terms & Conditions + Privacy Policy text and a `version` string. Read by the
+ *  public portal (to show the exact text a customer agrees to) and pinned onto
+ *  every recorded consent, so an acceptance can always be traced to the precise
+ *  wording that was live at the time. Managed from the Legal Documents tab. */
+export const SETTING_LEGAL_DOCS = "legal_docs";
+
 /** Public Storage bucket holding the per-sector attachment PDFs (managed from
  *  the Sector Playbooks tab; the send flow attaches them by public URL, which
  *  the n8n Gmail node downloads). */

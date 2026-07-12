@@ -118,6 +118,102 @@ export async function GET(req: Request): Promise<Response> {
   return Response.json({ ok: true, mode: "live", rows: Array.isArray(rows) ? rows : [], total });
 }
 
+/**
+ * Rename a folder: set `batch` = newBatch on every row currently in oldBatch.
+ * Body: { batch: <current folder>, newBatch: <new name> }. The Ungrouped
+ * bucket (null batch) can't be renamed — it's the "no folder" bucket.
+ */
+export async function PATCH(req: Request): Promise<Response> {
+  if (!sameOrigin(req)) {
+    return Response.json({ ok: false, mode: "live", error: "Forbidden." }, { status: 403 });
+  }
+
+  const body = (await req.json().catch(() => null)) as
+    | { batch?: unknown; newBatch?: unknown }
+    | null;
+
+  // The Ungrouped bucket is `batch IS NULL` and has no real name to rename.
+  const oldBatch = safeBatchName(body?.batch);
+  const newBatch = safeBatchName(body?.newBatch);
+  if (!oldBatch || !newBatch) {
+    return Response.json(
+      { ok: false, mode: "live", error: "A valid current and new folder name are required (letters, numbers, . _ -; up to 80 chars)." },
+      { status: 400 },
+    );
+  }
+  if (oldBatch === newBatch) {
+    return Response.json({ ok: true, mode: "live", updated: 0 });
+  }
+
+  const target = supabaseTarget();
+  if (target.state === "demo") {
+    return Response.json({ ok: true, mode: "demo", updated: 0 });
+  }
+  if (target.state === "misconfigured") {
+    console.error("[pipeline/leads] SUPABASE_URL is not a valid URL.");
+    return Response.json({ ok: false, mode: "live", error: "Importer is misconfigured." }, { status: 500 });
+  }
+
+  // Guard against merging into an existing folder unless the caller opts in.
+  const force = new URL(req.url).searchParams.get("force") === "1";
+  if (!force) {
+    try {
+      const check = await fetch(
+        `${target.base}/rest/v1/${TABLE}?select=id&batch=eq.${encodeURIComponent(newBatch)}&limit=1`,
+        {
+          headers: { apikey: target.key, Authorization: `Bearer ${target.key}` },
+          cache: "no-store",
+        },
+      );
+      if (check.ok) {
+        const existing = (await check.json().catch(() => [])) as unknown[];
+        if (Array.isArray(existing) && existing.length > 0) {
+          return Response.json(
+            { ok: false, mode: "live", conflict: true, error: `A folder named “${newBatch}” already exists.` },
+            { status: 409 },
+          );
+        }
+      }
+    } catch (e) {
+      console.error("[pipeline/leads] rename conflict check failed:", e);
+      // fall through — the rename below is still safe (just may merge)
+    }
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `${target.base}/rest/v1/${TABLE}?batch=eq.${encodeURIComponent(oldBatch)}&select=id`,
+      {
+        method: "PATCH",
+        headers: {
+          apikey: target.key,
+          Authorization: `Bearer ${target.key}`,
+          "Content-Type": "application/json",
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify({ batch: newBatch }),
+      },
+    );
+  } catch (e) {
+    console.error("[pipeline/leads] rename fetch failed:", e);
+    return Response.json({ ok: false, mode: "live", error: "Could not reach the database." }, { status: 502 });
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    console.error(`[pipeline/leads] Supabase PATCH ${res.status}:`, detail.slice(0, 1000));
+    if (isMissingBatchColumn(detail)) {
+      return Response.json({ ok: false, mode: "live", needsMigration: true, error: "Folders need a one-time migration." }, { status: 422 });
+    }
+    return Response.json({ ok: false, mode: "live", error: "The database rejected the rename." }, { status: 502 });
+  }
+
+  const updatedRows = await res.json().catch(() => []);
+  const updated = Array.isArray(updatedRows) ? updatedRows.length : 0;
+  return Response.json({ ok: true, mode: "live", updated, batch: newBatch });
+}
+
 export async function DELETE(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, deleted: 0, mode: "live", error: "Forbidden." }, { status: 403 });

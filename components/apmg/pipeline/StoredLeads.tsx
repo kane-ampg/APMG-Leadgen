@@ -4,9 +4,11 @@ import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowLeft,
+  Check,
   ChevronRight,
   Database,
   Folder,
+  Pencil,
   RefreshCw,
   Search,
   Trash2,
@@ -31,6 +33,32 @@ interface BatchSummary {
 
 function folderLabel(batch: string): string {
   return batch === UNGROUPED ? "Ungrouped" : batch;
+}
+
+// Mirror of safeBatchName in lib/pipeline/server.ts — the server is the source
+// of truth, this just gives instant client-side feedback.
+const BATCH_RE = /^[\w.-]{1,80}$/;
+
+/** PATCH a folder rename. Returns null on success, else a user-facing message. */
+async function renameFolder(oldBatch: string, next: string): Promise<string | null> {
+  const trimmed = next.trim();
+  if (!trimmed) return "Enter a folder name.";
+  if (!BATCH_RE.test(trimmed)) return "Use letters, numbers, dots, dashes or underscores (max 80).";
+  if (trimmed === oldBatch) return null; // no-op, treat as success
+  try {
+    const res = await fetch("/api/pipeline/leads", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ batch: oldBatch, newBatch: trimmed }),
+    });
+    const data = (await res.json().catch(() => null)) as
+      | { ok?: boolean; error?: string; conflict?: boolean }
+      | null;
+    if (!res.ok || !data?.ok) return data?.error ?? `Rename failed (${res.status}).`;
+    return null;
+  } catch {
+    return "Network error during rename.";
+  }
 }
 
 function fmtWhen(iso: string | null): string {
@@ -76,6 +104,10 @@ export function StoredLeadsPanel({
           refreshKey={refreshSignal + localRefresh}
           onBack={() => setOpen(null)}
           onChanged={() => setLocalRefresh((n) => n + 1)}
+          onRenamed={(next) => {
+            setOpen(next);
+            setLocalRefresh((n) => n + 1);
+          }}
         />
       ) : (
         <FoldersView refreshKey={refreshSignal + localRefresh} onOpen={setOpen} />
@@ -345,7 +377,7 @@ function FoldersView({
         ) : (
           <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2 xl:grid-cols-3">
             {state.batches.map((b) => (
-              <FolderCard key={b.batch} batch={b} onOpen={onOpen} onDeleted={load} />
+              <FolderCard key={b.batch} batch={b} onOpen={onOpen} onDeleted={load} onRenamed={load} />
             ))}
           </div>
         ))}
@@ -360,15 +392,43 @@ function FolderCard({
   batch,
   onOpen,
   onDeleted,
+  onRenamed,
 }: {
   batch: BatchSummary;
   onOpen: (batch: string) => void;
   onDeleted: () => void;
+  onRenamed: () => void;
 }) {
   const reduce = !!useReducedMotion();
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(batch.batch);
+  const [savingName, setSavingName] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  const canRename = batch.batch !== UNGROUPED;
+
+  function startRename() {
+    setName(batch.batch);
+    setRenameError(null);
+    setRenaming(true);
+  }
+
+  async function saveRename() {
+    setSavingName(true);
+    setRenameError(null);
+    const err = await renameFolder(batch.batch, name);
+    if (err) {
+      setRenameError(err);
+      setSavingName(false);
+      return;
+    }
+    setRenaming(false);
+    setSavingName(false);
+    onRenamed(); // reloads the folder list, which unmounts/remounts this card
+  }
 
   async function del() {
     setDeleting(true);
@@ -401,12 +461,17 @@ function FolderCard({
     >
       {/* base: the openable folder — always mounted so the card keeps its size,
           letting the confirm controls slide in over it with no layout shift */}
-      <div className={cn("flex items-center gap-1 pl-3 pr-2", confirming && "pointer-events-none")}>
+      <div
+        className={cn(
+          "flex items-center gap-1 pl-3 pr-2",
+          (confirming || renaming) && "pointer-events-none",
+        )}
+      >
         <button
           type="button"
           onClick={() => onOpen(batch.batch)}
-          aria-hidden={confirming}
-          tabIndex={confirming ? -1 : undefined}
+          aria-hidden={confirming || renaming}
+          tabIndex={confirming || renaming ? -1 : undefined}
           data-track="folder_open"
           data-track-batch={batch.batch}
           className="flex min-w-0 flex-1 items-center gap-3 py-3 text-left focus-visible:outline-none"
@@ -425,11 +490,24 @@ function FolderCard({
             aria-hidden
           />
         </button>
+        {canRename && (
+          <button
+            type="button"
+            onClick={startRename}
+            aria-label={`Rename ${folderLabel(batch.batch)} folder`}
+            tabIndex={confirming || renaming ? -1 : undefined}
+            data-track="folder_rename"
+            data-track-batch={batch.batch}
+            className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-primary/10 hover:text-primary focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
+          >
+            <Pencil className="h-3.5 w-3.5" aria-hidden />
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setConfirming(true)}
           aria-label={`Delete ${folderLabel(batch.batch)} folder`}
-          tabIndex={confirming ? -1 : undefined}
+          tabIndex={confirming || renaming ? -1 : undefined}
           data-track="folder_delete"
           data-track-batch={batch.batch}
           className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:opacity-100"
@@ -437,6 +515,90 @@ function FolderCard({
           <Trash2 className="h-3.5 w-3.5" aria-hidden />
         </button>
       </div>
+
+      {/* rename overlay: slides in over the card (same footprint) with an inline
+          input. Enter/✓ saves, Esc/✕ cancels. */}
+      <AnimatePresence>
+        {renaming && (
+          <motion.div
+            className="absolute inset-0 z-10 overflow-hidden rounded-lg"
+            initial={reduce ? { opacity: 0 } : { opacity: 0, x: "18%" }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, x: "18%" }}
+            transition={{ duration: reduce ? 0 : 0.24, ease: EASE }}
+          >
+            <div className="absolute inset-0 bg-card" aria-hidden />
+            <div
+              className="absolute inset-0 rounded-lg bg-primary/[0.05] ring-1 ring-inset ring-primary/40"
+              aria-hidden
+            />
+            <div className="relative flex h-full items-center gap-2 px-3">
+              <Pencil className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+              <input
+                type="text"
+                value={name}
+                autoFocus
+                disabled={savingName}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  if (renameError) setRenameError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void saveRename();
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setRenaming(false);
+                    setRenameError(null);
+                  }
+                }}
+                aria-label="New folder name"
+                aria-invalid={!!renameError}
+                title={renameError ?? undefined}
+                data-track="folder_rename_input"
+                className={cn(
+                  "h-8 min-w-0 flex-1 rounded-md border bg-background px-2 font-mono text-[12px] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                  renameError ? "border-destructive" : "border-border",
+                )}
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setRenaming(false);
+                  setRenameError(null);
+                }}
+                disabled={savingName}
+                aria-label="Cancel rename"
+                className="shrink-0 px-2"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden />
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => void saveRename()}
+                disabled={savingName}
+                data-track="folder_rename_save"
+                data-track-batch={batch.batch}
+                aria-label="Save folder name"
+                className="shrink-0 gap-1.5 px-2"
+              >
+                <Check className="h-3.5 w-3.5" aria-hidden />
+                {savingName ? "Saving…" : "Save"}
+              </Button>
+            </div>
+            {renameError && (
+              <span
+                role="alert"
+                className="pointer-events-none absolute inset-x-3 bottom-0.5 truncate font-mono text-[10px] text-destructive"
+              >
+                {renameError}
+              </span>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* confirm overlay: slides in over the card (same footprint), revealing
           Cancel + Delete. Solid bg hides the base; destructive ring carries tone. */}
@@ -510,15 +672,37 @@ function FolderDetail({
   refreshKey,
   onBack,
   onChanged,
+  onRenamed,
 }: {
   batch: string;
   refreshKey: number;
   onBack: () => void;
   onChanged: () => void;
+  onRenamed: (next: string) => void;
 }) {
   const [state, setState] = useState<DetailState>({ status: "loading" });
   const [folderConfirm, setFolderConfirm] = useState(false);
   const [deletingFolder, setDeletingFolder] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const [name, setName] = useState(batch);
+  const [savingName, setSavingName] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  const canRename = batch !== UNGROUPED;
+
+  async function saveRename() {
+    setSavingName(true);
+    setRenameError(null);
+    const err = await renameFolder(batch, name);
+    if (err) {
+      setRenameError(err);
+      setSavingName(false);
+      return;
+    }
+    setRenaming(false);
+    setSavingName(false);
+    onRenamed(name.trim());
+  }
 
   const load = useCallback(async () => {
     setState({ status: "loading" });
@@ -591,30 +775,113 @@ function FolderDetail({
           <ArrowLeft className="h-3.5 w-3.5" aria-hidden />
           Folders
         </Button>
-        <div className="flex min-w-0 items-center gap-2.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-primary/40 bg-primary/10 text-primary">
             <Folder className="h-4 w-4" aria-hidden />
           </span>
-          <div className="min-w-0">
-            <div className="truncate font-mono text-[12.5px] font-semibold text-foreground">
-              {folderLabel(batch)}
+          {renaming ? (
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={name}
+                  autoFocus
+                  disabled={savingName}
+                  onChange={(e) => {
+                    setName(e.target.value);
+                    if (renameError) setRenameError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      void saveRename();
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      setRenaming(false);
+                      setRenameError(null);
+                    }
+                  }}
+                  aria-label="New folder name"
+                  aria-invalid={!!renameError}
+                  data-track="folder_rename_input"
+                  className={cn(
+                    "h-8 min-w-0 flex-1 rounded-md border bg-background px-2 font-mono text-[12.5px] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    renameError ? "border-destructive" : "border-border",
+                  )}
+                />
+                <Button
+                  size="sm"
+                  onClick={() => void saveRename()}
+                  disabled={savingName}
+                  data-track="folder_rename_save"
+                  data-track-batch={batch}
+                  className="shrink-0 gap-1.5"
+                >
+                  <Check className="h-3.5 w-3.5" aria-hidden />
+                  {savingName ? "Saving…" : "Save"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setRenaming(false);
+                    setRenameError(null);
+                  }}
+                  disabled={savingName}
+                  className="shrink-0"
+                >
+                  Cancel
+                </Button>
+              </div>
+              {renameError && (
+                <span role="alert" className="font-mono text-[10.5px] text-destructive">
+                  {renameError}
+                </span>
+              )}
             </div>
-            <div className="tnum font-mono text-[10.5px] text-muted-foreground">
-              {state.status === "ready" ? `${rows.length.toLocaleString("en-US")} leads` : "loading…"}
+          ) : (
+            <div className="min-w-0">
+              <div className="truncate font-mono text-[12.5px] font-semibold text-foreground">
+                {folderLabel(batch)}
+              </div>
+              <div className="tnum font-mono text-[10.5px] text-muted-foreground">
+                {state.status === "ready" ? `${rows.length.toLocaleString("en-US")} leads` : "loading…"}
+              </div>
             </div>
-          </div>
+          )}
         </div>
-        {state.status === "ready" && rows.length > 0 && !folderConfirm && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setFolderConfirm(true)}
-            data-track="folder_delete"
-            className="ml-auto gap-1.5 text-destructive hover:bg-destructive/10"
-          >
-            <Trash2 className="h-3.5 w-3.5" aria-hidden />
-            Delete folder
-          </Button>
+        {!renaming && !folderConfirm && (
+          <div className="ml-auto flex items-center gap-2">
+            {canRename && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setName(batch);
+                  setRenameError(null);
+                  setRenaming(true);
+                }}
+                data-track="folder_rename"
+                data-track-batch={batch}
+                className="gap-1.5"
+              >
+                <Pencil className="h-3.5 w-3.5" aria-hidden />
+                Rename
+              </Button>
+            )}
+            {state.status === "ready" && rows.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setFolderConfirm(true)}
+                data-track="folder_delete"
+                className="gap-1.5 text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                Delete folder
+              </Button>
+            )}
+          </div>
         )}
       </div>
 

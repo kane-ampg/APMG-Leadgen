@@ -9,6 +9,8 @@ import {
   type InquiryStatus,
   type PortalInquiry,
 } from "@/lib/portal/server";
+import { loadLegalDocs } from "@/lib/legal/legalStore";
+import { isPlaceholderLegal, isValidVersion } from "@/lib/legal/legalDocs";
 
 // Portal enquiries — the lead-qualifying end of the services portal.
 //   POST  — the ServiceInquiryModal submits here: honeypot-screened, validated,
@@ -32,7 +34,7 @@ export const runtime = "nodejs";
 const TABLE = "portal_inquiries";
 const LIST_LIMIT = 200;
 const COLS =
-  "id,service_slug,service_name,name,email,phone,message,lead_id,business,campaign,category,status,created_at";
+  "id,service_slug,service_name,name,email,phone,message,lead_id,business,campaign,category,status,consent_version,created_at";
 
 const SERVICE_RE = /^[a-z0-9-]{1,40}$/;
 /** Mirrors the client-side check in ServiceInquiryModal. Rejects `?&=#` so a
@@ -76,6 +78,7 @@ function toInquiry(row: Record<string, unknown>): PortalInquiry {
     campaign: typeof row.campaign === "string" ? row.campaign : null,
     category: typeof row.category === "string" ? row.category : null,
     status,
+    consentVersion: typeof row.consent_version === "string" ? row.consent_version : null,
     createdAt: String(row.created_at ?? ""),
   };
 }
@@ -113,10 +116,20 @@ export async function POST(req: Request): Promise<Response> {
   const message = clip(b.message, 2000);
   const serviceName = clip(b.serviceName, 80);
 
+  // CONSENT (Privacy Act / APP 5, Spam Act): the enquirer must have agreed to
+  // the Terms & Privacy Policy BEFORE we store their PII. This is the binding,
+  // server-side gate — the client checkbox alone is unenforceable. We take the
+  // version the client says it accepted and require it to match the version
+  // currently published (loadLegalDocs), so a stale or forged tag can't be
+  // recorded as valid consent. Fail-CLOSED: no valid, current consent → no
+  // insert. (Demo mode has no DB/real traffic, so it is exempted below.)
+  const acceptedVersion =
+    typeof b.consentVersion === "string" ? b.consentVersion.trim() : "";
+
   const target = supabaseTarget();
   if (target.state === "demo") {
     // No Supabase — the modal still shows its thank-you state; nothing is lost
-    // that existed (demo mode has no real traffic).
+    // that existed (demo mode has no real traffic, nothing is stored).
     return Response.json({ ok: true, mode: "demo" });
   }
   if (target.state === "misconfigured") {
@@ -124,6 +137,25 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json({ ok: false, error: "storage" }, { status: 500 });
   }
 
+  // Resolve the currently-published legal version and enforce the match.
+  const legal = await loadLegalDocs();
+  if (isPlaceholderLegal(legal)) {
+    // No lawyer-reviewed policy has been published yet — we must not be
+    // collecting PII at all. Refuse rather than store without a real policy.
+    console.error("[portal/inquiries] refused: no published legal docs (placeholder).");
+    return Response.json(
+      { ok: false, error: "consent_unavailable" },
+      { status: 503 },
+    );
+  }
+  if (!isValidVersion(acceptedVersion) || acceptedVersion !== legal.version) {
+    // Missing / malformed / stale consent version → the customer has not
+    // validly agreed to the CURRENT terms. Do not store their PII.
+    return Response.json(
+      { ok: false, error: "consent_required", currentVersion: legal.version },
+      { status: 409 },
+    );
+  }
   // Attribution enrichment: snapshot the lead's name + CSV category now (leads
   // get reimported/deleted, so a join-at-read-time would rot).
   const { leadId, campaign } = readAttribution(req);
@@ -151,6 +183,10 @@ export async function POST(req: Request): Promise<Response> {
           business: lead?.name ?? null,
           campaign,
           category: lead?.category ?? null,
+          // The pinned legal version the enquirer agreed to (validated to match
+          // the current published version above) — the durable, server-side
+          // consent record tied to this exact PII row.
+          consent_version: legal.version,
         },
       ]),
     });
@@ -177,7 +213,9 @@ export async function POST(req: Request): Promise<Response> {
   await insertPortalEvents(target.base, target.key, [
     {
       event: "portal_inquiry",
-      props: { service },
+      // consent_version rides in props so the canonical funnel event also
+      // carries the accepted-terms version (queryable in the admin telemetry).
+      props: { service, consent_version: legal.version },
       lead_id: leadId,
       campaign,
       category: lead?.category ?? null,

@@ -18,6 +18,8 @@ export const PERMISSIONS = {
   "playbooks.view": "View sector playbooks",
   "playbooks.manage": "Configure sector playbooks (category mapping + attachment PDF)",
   "composer.view": "View the AI email composer configuration",
+  "legal.view": "View the portal legal documents (terms & privacy)",
+  "legal.manage": "Publish the portal terms & conditions and privacy policy",
   "telemetry.view": "View click telemetry",
   "settings.view": "View settings",
   "settings.manage": "Change settings",

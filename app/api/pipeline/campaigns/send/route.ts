@@ -9,9 +9,10 @@ import {
   safeCampaignTag,
   trackedLink,
 } from "@/lib/pipeline/campaign";
-import { campaignWebhook, sameOrigin, webhookAuthHeaders } from "@/lib/pipeline/server";
+import { campaignWebhook, sameOrigin, supabaseTarget, webhookAuthHeaders } from "@/lib/pipeline/server";
 import { loadPlaybooks, playbookPdfUrl } from "@/lib/pipeline/sectorStore";
 import { resolveSectorForCategory } from "@/lib/pipeline/sectors";
+import { fetchSuppressedEmails } from "@/lib/portal/server";
 
 // Sends an outreach email campaign to a set of stored leads. Each message's CTA
 // is rewritten to the attribution hook /t/<leadId>?c=<campaign> (app/t/[id]),
@@ -45,6 +46,8 @@ interface SendResult {
   mode: SendMode;
   campaign?: string;
   error?: string;
+  /** how many recipients were dropped because they had unsubscribed */
+  suppressed?: number;
 }
 
 interface CleanRecipient {
@@ -147,6 +150,35 @@ export async function POST(req: Request): Promise<Response> {
     return json({ ok: false, sent: 0, mode: "noop", error: "No recipients with a valid email address." }, 400);
   }
 
+  // Honour unsubscribes (Spam Act 2003): drop any recipient whose address is on
+  // the suppression list before we build/send anything. fetchSuppressedEmails
+  // fails OPEN (empty set) if the table is missing or the lookup errors, so a
+  // broken lookup never blocks a legitimate send — but that also means the
+  // opt-out list is only enforced once supabase/unsubscribe.sql has been run.
+  // We only bother when a real DB is configured (demo mode has no list).
+  let suppressedCount = 0;
+  const sb = supabaseTarget();
+  if (sb.state === "ok") {
+    const suppressed = await fetchSuppressedEmails(
+      sb.base,
+      sb.key,
+      recipients.map((r) => r.email),
+    );
+    if (suppressed.size > 0) {
+      const before = recipients.length;
+      for (let i = recipients.length - 1; i >= 0; i--) {
+        if (suppressed.has(recipients[i].email.toLowerCase())) recipients.splice(i, 1);
+      }
+      suppressedCount = before - recipients.length;
+    }
+  }
+  if (recipients.length === 0) {
+    return json(
+      { ok: false, sent: 0, mode: "noop", suppressed: suppressedCount, error: "Every recipient has unsubscribed." },
+      400,
+    );
+  }
+
   // Require the shared subject/body only when some recipient lacks its own
   // per-lead draft (in a pure AI send every recipient carries both).
   if (!subject && recipients.some((r) => !r.subject)) {
@@ -188,7 +220,7 @@ export async function POST(req: Request): Promise<Response> {
   if (target.state === "demo") {
     // Demo mode — no webhook configured. Simulate a successful send so the tab
     // is fully exercisable before n8n is wired up.
-    return json({ ok: true, sent: messages.length, mode: "demo", campaign });
+    return json({ ok: true, sent: messages.length, mode: "demo", campaign, suppressed: suppressedCount });
   }
 
   let res: Response;
@@ -210,7 +242,7 @@ export async function POST(req: Request): Promise<Response> {
     return json({ ok: false, sent: 0, mode: "live", error: "The automation rejected the campaign." }, 502);
   }
 
-  return json({ ok: true, sent: messages.length, mode: "live", campaign });
+  return json({ ok: true, sent: messages.length, mode: "live", campaign, suppressed: suppressedCount });
 }
 
 function json(result: SendResult, status = 200): Response {

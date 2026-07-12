@@ -9,6 +9,7 @@ import {
   Megaphone,
   PhoneCall,
   Radio,
+  ScrollText,
   Settings,
   Sparkles,
   Users,
@@ -30,6 +31,7 @@ export type TabId =
   | "integrations"
   | "playbooks"
   | "composer"
+  | "legal"
   | "telemetry"
   | "settings";
 
@@ -83,6 +85,7 @@ export const NAV: NavSection[] = [
   {
     caption: "System",
     items: [
+      { id: "legal", label: "Legal Documents", icon: ScrollText, perm: "legal.view" },
       { id: "telemetry", label: "Telemetry", icon: Activity, perm: "telemetry.view" },
       { id: "settings", label: "Settings", icon: Settings, perm: "settings.view" },
     ],
@@ -117,6 +120,7 @@ export const TAB_LABEL: Record<TabId, string> = {
   integrations: "Integrations",
   playbooks: "Sector Playbooks",
   composer: "Email Composer",
+  legal: "Legal Documents",
   telemetry: "Telemetry",
   settings: "Settings",
 };

@@ -45,6 +45,9 @@ export interface PortalInquiry {
   campaign: string | null;
   category: string | null;
   status: InquiryStatus;
+  /** The legal-docs version the enquirer agreed to when submitting (null on
+   *  rows created before the consent gate / from a pre-migration schema). */
+  consentVersion: string | null;
   createdAt: string;
 }
 
@@ -258,4 +261,94 @@ export async function insertPortalEvents(
  *  instead of a hard error. */
 export function isMissingPortalTable(status: number, detail: string): boolean {
   return status === 404 || /find the table|PGRST205/i.test(detail);
+}
+
+/* ── Email suppression / unsubscribe (supabase/unsubscribe.sql) ─────────────
+   Keyed by lowercased email so an opt-out survives lead re-imports. The
+   unsubscribe endpoint records rows; the send route filters against them so we
+   never email someone who opted out (Spam Act 2003). Every helper degrades to a
+   safe default rather than throwing. */
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** Record an opt-out (idempotent upsert on lower(email)). Returns "ok",
+ *  "needs_migration" when the table is absent, or "error" on anything else —
+ *  the endpoint still shows the customer a success page regardless, but a
+ *  non-ok result is logged so a broken suppression list can't hide. */
+export async function recordUnsubscribe(
+  base: string,
+  key: string,
+  email: string,
+  ctx?: { leadId?: string | null; campaign?: string | null },
+): Promise<"ok" | "needs_migration" | "error"> {
+  const addr = email.trim().toLowerCase();
+  if (!EMAIL_RE.test(addr)) return "error";
+  const row = {
+    email: addr,
+    lead_id: ctx?.leadId && isUuid(ctx.leadId) ? ctx.leadId : null,
+    campaign: ctx?.campaign ? ctx.campaign.slice(0, MAX_CAMPAIGN_LEN) : null,
+    reason: "unsubscribe",
+  };
+  try {
+    // Upsert so a second click can't 409 on the unique index.
+    const res = await fetch(
+      `${base}/rest/v1/email_suppression?on_conflict=email`,
+      {
+        method: "POST",
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          Prefer: "resolution=merge-duplicates,return=minimal",
+        },
+        body: JSON.stringify(row),
+      },
+    );
+    if (res.ok) return "ok";
+    const detail = await res.text().catch(() => "");
+    if (isMissingPortalTable(res.status, detail)) return "needs_migration";
+    console.error(`[portal] suppression insert ${res.status}:`, detail.slice(0, 500));
+    return "error";
+  } catch (e) {
+    console.error("[portal] suppression insert failed:", e);
+    return "error";
+  }
+}
+
+/** Return the subset of `emails` that have opted out (lowercased). On ANY error
+ *  or a missing table this returns an EMPTY set — i.e. it fails OPEN so a broken
+ *  lookup never silently blocks a legitimate send. The migration must therefore
+ *  be run before real sends; the send route surfaces that separately. */
+export async function fetchSuppressedEmails(
+  base: string,
+  key: string,
+  emails: string[],
+): Promise<Set<string>> {
+  const wanted = [...new Set(emails.map((e) => e.trim().toLowerCase()).filter((e) => EMAIL_RE.test(e)))];
+  if (wanted.length === 0) return new Set();
+  try {
+    // PostgREST in.() list; emails are validated above so the interpolation is
+    // limited to address characters. Quote each to be safe with '+' etc.
+    const inList = wanted.map((e) => `"${e.replace(/"/g, "")}"`).join(",");
+    const res = await fetch(
+      `${base}/rest/v1/email_suppression?select=email&email=in.(${encodeURIComponent(inList)})`,
+      { headers: { apikey: key, Authorization: `Bearer ${key}` }, cache: "no-store" },
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      if (!isMissingPortalTable(res.status, detail)) {
+        console.error(`[portal] suppression lookup ${res.status}:`, detail.slice(0, 300));
+      }
+      return new Set();
+    }
+    const rows = (await res.json().catch(() => [])) as Array<{ email?: unknown }>;
+    const out = new Set<string>();
+    for (const r of rows) {
+      if (typeof r.email === "string") out.add(r.email.trim().toLowerCase());
+    }
+    return out;
+  } catch (e) {
+    console.error("[portal] suppression lookup failed:", e);
+    return new Set();
+  }
 }

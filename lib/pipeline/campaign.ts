@@ -200,7 +200,7 @@ export interface ComposeDraft {
  *  sees the engagement. */
 export function ensureLinkToken(html: string): string {
   if (html.includes("{{link}}")) return html;
-  return `${html}\n<p><a href="{{link}}">See how it works &rarr;</a></p>`;
+  return `${html}\n<p><a href="{{link}}">Your property, well looked after</a></p>`;
 }
 
 /** Map a raw CSV Category to the sector wording APMG actually uses in Australian
@@ -230,6 +230,44 @@ function sectorPhrase(category: string | null): string {
   return c.replace(/\s*services?\s*$/i, "").trim().toLowerCase() || "commercial and residential";
 }
 
+/** Build the tailored, short-and-crisp Australian CTA button label from a lead's
+ *  category — the deterministic mirror of the AI instruction's CTA rule, so the
+ *  template fallback reads the same as a Claude draft. Reuses sectorPhrase() for
+ *  the Aussie sector wording; a few sectors read better with a bespoke phrasing.
+ *  Kept under ~5 words, sentence case, no trailing arrow (the n8n branded button
+ *  appends its own → and the app preview needs no arrow). */
+export function ctaLabel(category: string | null): string {
+  const c = (category ?? "").trim();
+  if (!c) return "Your property, well looked after";
+  const sector = sectorPhrase(c);
+  switch (sector) {
+    case "aged care":
+    case "retirement living":
+      return "Aged care upkeep, sorted";
+    case "early learning":
+      return "Childcare centre, well maintained";
+    case "education":
+      return "Keep your school site sorted";
+    case "healthcare":
+      return "Healthcare property, sorted";
+    case "body corporate and strata":
+      return "Strata maintenance, sorted";
+    case "industrial":
+      return "Keep your site sorted";
+    case "retail":
+      return "Retail fit-out, well maintained";
+    case "hospitality":
+      return "Venue upkeep, sorted";
+    case "commercial and residential":
+      return "Your property, well looked after";
+    default: {
+      // Title-case the sector for a readable "<Sector> upkeep, sorted".
+      const label = sector.charAt(0).toUpperCase() + sector.slice(1);
+      return `${label} upkeep, sorted`;
+    }
+  }
+}
+
 /** Deterministic per-lead draft used as the fallback (no ANTHROPIC_API_KEY, or
  *  a Claude miss) and as the base the composer overrides — mirrors the composer's
  *  shape and rules (tailored opening paragraph, {{link}} CTA, APMG sign-off) so
@@ -244,7 +282,7 @@ export function demoDraft(lead: ComposeLeadInput): ComposeDraft {
     `<p>APMG Services is a Melbourne-based multi-trade property maintenance partner covering painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe, all handled by one licensed team. ` +
     `We keep ${escapeHtml(trade)} facilities like yours safe, compliant and well maintained, working around your operations so the people who rely on them are never disrupted. ` +
     `Whether it&rsquo;s scheduled upkeep or an urgent repair, you get one reliable partner instead of chasing multiple contractors.</p>` +
-    `<p><a href="{{link}}">See how APMG can help &rarr;</a></p>` +
+    `<p><a href="{{link}}">${escapeHtml(ctaLabel(category))}</a></p>` +
     `<p>The APMG Services team</p>`;
   return {
     id: lead.id,

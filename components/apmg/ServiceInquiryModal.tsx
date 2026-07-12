@@ -31,6 +31,15 @@ export interface InquiryService {
 
 type Status = "idle" | "sending" | "sent" | "error";
 
+/** Shape of GET /api/portal/legal — the current published policy the customer
+ *  agrees to. `placeholder` is true until lawyer-reviewed wording is set. */
+interface LegalInfo {
+  version: string;
+  termsHtml: string;
+  privacyHtml: string;
+  placeholder: boolean;
+}
+
 /**
  * Customer-facing enquiry modal for the services portal. Mirrors the
  * CloseDealModal grammar exactly (AnimatePresence, z-[80]/[81] backdrop +
@@ -50,9 +59,14 @@ type Status = "idle" | "sending" | "sent" | "error";
 export function ServiceInquiryModal({
   service,
   onClose,
+  standalone = false,
 }: {
   service: InquiryService | null;
   onClose: () => void;
+  /** True on the public /portal host. Gates the customer-facing consent
+   *  requirement + the `consent_accept` funnel event (the internal "Our
+   *  Services" demo tab must not require consent nor pollute the funnel). */
+  standalone?: boolean;
 }) {
   const reduce = useReducedMotion();
   const ref = useRef<HTMLDivElement>(null);
@@ -69,6 +83,15 @@ export function ServiceInquiryModal({
   /** Honeypot — see the hidden field below. Humans never touch it. */
   const [website, setWebsite] = useState("");
   const [emailTouched, setEmailTouched] = useState(false);
+  /** Consent gate (customer host only): the enquirer must actively tick this
+   *  before we collect their details. Unticked by default (active consent, per
+   *  OAIC guidance) and re-armed per enquiry. */
+  const [consentChecked, setConsentChecked] = useState(false);
+  /** Current published legal docs, fetched on open so we show the exact text +
+   *  version the customer agrees to and pin that version onto the submission. */
+  const [legal, setLegal] = useState<LegalInfo | null>(null);
+  /** Which doc is expanded inline (T&C / Privacy), or null. */
+  const [openDoc, setOpenDoc] = useState<"terms" | "privacy" | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   /** Mirror of `status` readable inside the open-effect without adding it to
    *  the deps (which would re-run the reset mid-flow). */
@@ -94,9 +117,40 @@ export function ServiceInquiryModal({
     setStatusBoth("idle");
     setWebsite("");
     setEmailTouched(false);
+    // Re-arm consent per enquiry — an earlier acceptance must never silently
+    // carry over to a new submission (or a new terms version).
+    setConsentChecked(false);
+    setOpenDoc(null);
     // focus the first field after the trap's initial focus + paint
     requestAnimationFrame(() => nameRef.current?.focus());
   }, [service]);
+
+  // Fetch the current published legal docs when the modal opens (customer host
+  // only — the internal demo tab neither gates nor records consent). We pin the
+  // returned `version` onto the submission; the server re-validates it against
+  // the live version, so a stale fetch can't smuggle bad consent through.
+  useEffect(() => {
+    if (!service || !standalone) return;
+    let cancelled = false;
+    fetch("/api/portal/legal", { headers: { "Content-Type": "application/json" } })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: (LegalInfo & { ok?: boolean }) | null) => {
+        if (cancelled || !j || j.ok === false) return;
+        setLegal({
+          version: String(j.version ?? ""),
+          termsHtml: String(j.termsHtml ?? ""),
+          privacyHtml: String(j.privacyHtml ?? ""),
+          placeholder: Boolean(j.placeholder),
+        });
+      })
+      .catch(() => {
+        /* leave legal null → the consent block shows a soft "unavailable" note
+           and the submit stays gated (fail-closed) on the customer host */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [service, standalone]);
 
   useEffect(() => {
     if (!service) return;
@@ -127,7 +181,14 @@ export function ServiceInquiryModal({
   /** Started typing but under the minimum — surface WHY Send is disabled
    *  instead of leaving a silently-dead button on a conversion-critical form. */
   const showMessageHint = messageLength > 0 && messageLength < MIN_MESSAGE;
-  const valid = emailValid && messageLength >= MIN_MESSAGE;
+  /** On the customer host consent is mandatory: a real (non-placeholder) policy
+   *  must be loaded AND the box ticked. On the internal demo tab it's not
+   *  required. If the policy fetch failed or is a placeholder, consent can't be
+   *  validly given, so the gate stays closed (matches the server's fail-closed
+   *  rule) — the customer sees why. */
+  const consentReady = !!legal && !legal.placeholder;
+  const consentSatisfied = !standalone || (consentReady && consentChecked);
+  const valid = emailValid && messageLength >= MIN_MESSAGE && consentSatisfied;
 
   async function submit() {
     if (!service || !valid || status === "sending") return;
@@ -143,6 +204,10 @@ export function ServiceInquiryModal({
           email: email.trim(),
           phone: phone.trim() || undefined,
           message: message.trim(),
+          // The pinned legal version the customer ticked (customer host only).
+          // The server re-validates it against the live published version and
+          // refuses to store PII without a valid, current match.
+          consentVersion: standalone ? legal?.version : undefined,
           // The honeypot rides along untouched; the server silently drops
           // any submission where a "visitor" filled it in.
           website,
@@ -154,6 +219,14 @@ export function ServiceInquiryModal({
         // nothing about whether the enquiry actually landed. Demo mode
         // (`mode:"demo"`) counts too: the visitor saw a thank-you.
         track("portal_inquiry_submit", { service: service.slug });
+        // Behavioural consent log (customer host only, per the funnel's host
+        // discrimination). The AUTHORITATIVE consent record is the server-side
+        // consent_version on the stored enquiry row; this event is complementary
+        // — a timestamped, attributed "they ticked it" signal for the admin
+        // telemetry. Never fired from the internal demo tab.
+        if (standalone && legal?.version) {
+          track("consent_accept", { version: legal.version, scope: "enquiry", service: service.slug });
+        }
         setStatusBoth("sent");
       } else {
         setStatusBoth("error");
@@ -368,6 +441,72 @@ export function ServiceInquiryModal({
                           : "The more detail the better — it helps us send the right tradesperson."}
                       </p>
                     </div>
+
+                    {/* Consent gate — customer host only. Mandatory active
+                        opt-in to the current Terms & Privacy Policy before any
+                        PII is collected. The links expand the exact published
+                        text inline so consent is informed; the version is
+                        pinned onto the submission and re-checked server-side. */}
+                    {standalone && (
+                      <div className="space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+                        {consentReady ? (
+                          <>
+                            <label className="flex cursor-pointer items-start gap-2.5">
+                              <input
+                                type="checkbox"
+                                checked={consentChecked}
+                                onChange={(e) => setConsentChecked(e.target.checked)}
+                                className="mt-0.5 h-4 w-4 shrink-0 rounded border-input text-primary focus-visible:ring-2 focus-visible:ring-ring"
+                              />
+                              <span className="text-[12px] leading-relaxed text-foreground">
+                                I agree to APMG Services&rsquo;{" "}
+                                <button
+                                  type="button"
+                                  onClick={() => setOpenDoc(openDoc === "terms" ? null : "terms")}
+                                  className="font-medium text-primary underline underline-offset-2"
+                                >
+                                  Terms &amp; Conditions
+                                </button>{" "}
+                                and{" "}
+                                <button
+                                  type="button"
+                                  onClick={() => setOpenDoc(openDoc === "privacy" ? null : "privacy")}
+                                  className="font-medium text-primary underline underline-offset-2"
+                                >
+                                  Privacy Policy
+                                </button>
+                                , and to APMG contacting me about my enquiry. Please don&rsquo;t
+                                include sensitive personal information in your message.
+                              </span>
+                            </label>
+                            {openDoc && legal && (
+                              <div
+                                className="max-h-40 overflow-y-auto rounded-md border border-border bg-background p-3 text-[12px] leading-relaxed text-muted-foreground [&_a]:text-primary [&_a]:underline [&_h1]:mb-1 [&_h1]:font-semibold [&_h2]:mb-1 [&_h2]:font-semibold [&_p]:mb-2"
+                                // Operator-authored, lawyer-reviewed policy text
+                                // from the Legal Documents tab (trusted source).
+                                dangerouslySetInnerHTML={{
+                                  __html: openDoc === "terms" ? legal.termsHtml : legal.privacyHtml,
+                                }}
+                              />
+                            )}
+                          </>
+                        ) : (
+                          /* No published policy (or fetch failed): we cannot
+                             validly collect consent, so we say so and the submit
+                             stays disabled (fail-closed, matches the server). */
+                          <p className="text-[12px] leading-relaxed text-muted-foreground">
+                            Our enquiry form is briefly unavailable. Please email us at{" "}
+                            <a
+                              href={mailtoFallback}
+                              className="font-medium text-primary underline underline-offset-2"
+                            >
+                              {CONTACT_EMAIL}
+                            </a>{" "}
+                            and we&rsquo;ll help you directly.
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     {/* Honeypot. Visually hidden and out of the tab order —
                         real visitors never see it, automated form-fillers do,

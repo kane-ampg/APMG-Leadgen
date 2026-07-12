@@ -10,6 +10,7 @@ import { CommandBar } from "./CommandBar";
 import { ClosedDealsPage } from "./ClosedDealsPage";
 import { ComingSoon } from "./ComingSoon";
 import { ComposerConfigPage } from "./ComposerConfigPage";
+import { LegalDocsPage } from "./LegalDocsPage";
 import { EnquiriesPage } from "./EnquiriesPage";
 import { IntegrationsPage } from "./IntegrationsPage";
 import { MobileHeader } from "./MobileHeader";
@@ -126,6 +127,8 @@ export function DashboardShell() {
                   <SectorPlaybooksPage />
                 ) : activeTab === "composer" ? (
                   <ComposerConfigPage />
+                ) : activeTab === "legal" ? (
+                  <LegalDocsPage />
                 ) : activeTab === "telemetry" ? (
                   <TelemetryPage />
                 ) : (

@@ -15,7 +15,7 @@ import {
 // CSV import fills) and returned to the client, which mirrors them into the
 // audience table — so the lead becomes sendable without a re-fetch.
 //
-// Webhook payload:  { leads: [{ id, website }] }  (≤ MAX_FIND_LEADS)
+// Webhook payload:  { leads: [{ id, website }] }  (≤ CHUNK_SIZE per call)
 // Webhook response: { ok, results: [{ id, website, emails, best_email }] }
 //
 // SECURITY — TODO before exposing publicly: like the other pipeline routes this
@@ -25,6 +25,12 @@ export const runtime = "nodejs";
 // The finder fetches two pages per lead sequentially in n8n; a full batch can
 // take minutes — give serverless deploys the platform max.
 export const maxDuration = 300;
+
+/** Leads per webhook call. n8n runs the two page-fetches per lead sequentially
+ *  and n8n cloud closes webhook connections after ~100s, so a large batch in
+ *  one call gets killed mid-run. Small chunks keep every call comfortably
+ *  inside the window; the route walks the chunks sequentially. */
+const CHUNK_SIZE = 10;
 
 type FindMode = "live" | "demo" | "noop";
 
@@ -169,31 +175,64 @@ export async function POST(req: Request): Promise<Response> {
     return json({ ok: true, mode: "demo", results: [], found: 0, saved: 0 });
   }
 
-  let res: Response;
-  try {
-    res = await fetch(target.url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...webhookAuthHeaders() },
-      body: JSON.stringify({ leads }),
-      // two page-fetches per lead, sequential in n8n — allow a slow batch
-      signal: AbortSignal.timeout(240_000),
-    });
-  } catch (e) {
-    console.error("[pipeline/find-emails] fetch to n8n webhook failed:", e);
-    return json({ ok: false, mode: "live", error: "Could not reach the email finder automation." }, 502);
+  // Walk the batch in small chunks. A chunk that fails is logged and skipped so
+  // one slow/broken site cluster can't sink the whole run; `reached`/`answered`
+  // distinguish "n8n unreachable" from "n8n replied but not with results".
+  const results: FindResult[] = [];
+  let reached = 0; // chunks that got any HTTP 200 back
+  let answered = 0; // chunks whose reply carried a results array
+  for (let at = 0; at < leads.length; at += CHUNK_SIZE) {
+    const chunk = leads.slice(at, at + CHUNK_SIZE);
+    let res: Response;
+    try {
+      res = await fetch(target.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...webhookAuthHeaders() },
+        body: JSON.stringify({ leads: chunk }),
+        // two page-fetches per lead, sequential in n8n — allow a slow chunk
+        signal: AbortSignal.timeout(120_000),
+      });
+    } catch (e) {
+      console.error("[pipeline/find-emails] fetch to n8n webhook failed:", e);
+      continue;
+    }
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      console.error(`[pipeline/find-emails] n8n webhook ${res.status}:`, detail.slice(0, 500));
+      continue;
+    }
+    reached++;
+    const data = (await res.json().catch(() => null)) as { results?: unknown } | null;
+    if (!data || !Array.isArray(data.results)) {
+      // A 200 WITHOUT a results array is n8n's default "workflow executed"
+      // reply (or a lapsed/wrong instance answering) — the run never reached
+      // the Respond node. That's a wiring problem, never "0 addresses found".
+      console.error(
+        "[pipeline/find-emails] webhook answered without results:",
+        JSON.stringify(data ?? null).slice(0, 300),
+      );
+      continue;
+    }
+    answered++;
+    for (const raw of data.results) {
+      const clean = sanitizeResult(raw, seen);
+      if (clean) results.push(clean);
+    }
   }
 
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    console.error(`[pipeline/find-emails] n8n webhook ${res.status}:`, detail.slice(0, 1000));
-    return json({ ok: false, mode: "live", error: "The email finder automation rejected the run." }, 502);
+  if (answered === 0) {
+    return json(
+      {
+        ok: false,
+        mode: "live",
+        error:
+          reached === 0
+            ? "Could not reach the email finder automation — check the n8n instance is up and the webhook URL on the Integrations tab."
+            : "The automation answered without results — check that the APMG Email Finder workflow is imported and Activated in n8n, and that the Integrations tab holds ITS Production URL (path /webhook/email-finder).",
+      },
+      502,
+    );
   }
-
-  const data = (await res.json().catch(() => null)) as { results?: unknown } | null;
-  const rawResults = Array.isArray(data?.results) ? data.results : [];
-  const results = rawResults
-    .map((r) => sanitizeResult(r, seen))
-    .filter((r): r is FindResult => r !== null);
 
   const found = results.filter((r) => r.emails.length > 0).length;
   const saved = await persistFoundEmails(results);

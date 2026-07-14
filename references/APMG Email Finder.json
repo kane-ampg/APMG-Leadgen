@@ -3,7 +3,7 @@
   "nodes": [
     {
       "parameters": {
-        "content": "## APMG - Email Finder (website → best contact address)\n\n**Trigger:** the dashboard's Pipeline → Send Campaigns tab POSTs here when you click *Find emails* — it sends ONLY the selected leads that have a website but no stored email (the app filters; this workflow scrapes every lead it receives).\n\n**Setup (once):**\n1. RECOMMENDED — open the **Find Webhook** node → Authentication → **Header Auth**, create a header credential named `x-apmg-secret` with a random value, then set that same value as `N8N_WEBHOOK_SECRET` in the app's env. This webhook triggers server-side page fetches, so leaving it open lets anyone who finds the URL run them.\n2. **Activate** the workflow and copy the **Production URL** from the Webhook node.\n3. Add it on the dashboard's **Integrations** tab (Email Finder card), or set `N8N_EMAIL_FINDER_WEBHOOK_URL` in `.env.local` and restart the app.\n\n**What it does per lead:**\n- Fetches the homepage (internal / private-network hosts are rejected — SSRF guard).\n- Finds the most contact-ish same-site link (contact > get in touch / enquiries > about) and fetches it too.\n- Extracts addresses from both pages (mailto: links first, then a text scan), drops junk / placeholder / no-reply ones, prefers the lead's own domain, then role inboxes (info@, contact@, sales@ ...) — mirroring bestEmail() in lib/pipeline/campaign.ts.\n- Leads whose sites yield nothing come back with an empty list, so the app can tell \"tried, none found\" from \"not attempted\".\n\n**Request body:** `{ leads: [{ id, website }] }` (≤ 50 leads per run)\n**Response:** `{ ok: true, results: [{ id, website, emails: [..≤10], best_email }] }`\n\nThe app stores the returned addresses on each lead (same field the CSV import fills), so they show up in the audience table immediately and future sends need no re-scrape.",
+        "content": "## APMG - Email Finder (website → best contact address)\n\n**Trigger:** the dashboard's Pipeline → Send Campaigns tab POSTs here when you click *Find emails* — it sends ONLY the selected leads that have a website but no stored email (the app filters; this workflow scrapes every lead it receives).\n\n**Setup (once):**\n1. RECOMMENDED — open the **Find Webhook** node → Authentication → **Header Auth**, create a header credential named `x-apmg-secret` with a random value, then set that same value as `N8N_WEBHOOK_SECRET` in the app's env. This webhook triggers server-side page fetches, so leaving it open lets anyone who finds the URL run them.\n2. **Activate** the workflow and copy the **Production URL** from the Webhook node.\n3. Add it on the dashboard's **Integrations** tab (Email Finder card), or set `N8N_EMAIL_FINDER_WEBHOOK_URL` in `.env.local` and restart the app.\n\n**What it does per lead:**\n- Fetches the homepage (internal / private-network hosts are rejected — SSRF guard).\n- Finds the most contact-ish same-site link (contact > get in touch / enquiries > about) and fetches it too.\n- Extracts addresses from both pages (mailto: links first, then a text scan), drops junk / placeholder / no-reply ones, prefers the lead's own domain, then role inboxes (info@, contact@, sales@ ...) — mirroring bestEmail() in lib/pipeline/campaign.ts.\n- Leads whose sites yield nothing come back with an empty list, so the app can tell \"tried, none found\" from \"not attempted\".\n\n**Request body:** `{ leads: [{ id, website }] }` — the app sends chunks of ≤ 10 per call (n8n cloud closes webhook connections after ~100s; the workflow itself accepts up to 50).\n**Response:** `{ ok: true, results: [{ id, website, emails: [..≤10], best_email }] }`\n\nThe app stores the returned addresses on each lead (same field the CSV import fills), so they show up in the audience table immediately and future sends need no re-scrape.",
         "height": 640,
         "width": 480,
         "color": 4
@@ -67,7 +67,7 @@
               "responseFormat": "text"
             }
           },
-          "timeout": 20000
+          "timeout": 10000
         }
       },
       "id": "dd400000-4444-4444-8444-000000000004",
@@ -114,7 +114,7 @@
               "responseFormat": "text"
             }
           },
-          "timeout": 20000
+          "timeout": 10000
         }
       },
       "id": "ff600000-6666-4666-8666-000000000006",

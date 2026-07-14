@@ -15,6 +15,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Globe,
   Mail,
   PenLine,
   RefreshCw,
@@ -34,6 +35,7 @@ import {
   DEFAULT_SUBJECT,
   isEmail,
   MAX_COMPOSE_LEADS,
+  MAX_FIND_LEADS,
   MAX_RECIPIENTS,
   MERGE_TOKENS,
   renderBody,
@@ -65,6 +67,9 @@ type SendMode = "live" | "demo" | "noop";
 // AI drafting via the in-app composer (app/api/pipeline/campaigns/compose)
 type ComposePhase = "idle" | "running" | "ready" | "error";
 type DraftMode = "template" | "ai";
+// Email finding via the n8n Email Finder (app/api/pipeline/campaigns/find-emails)
+type FindPhase = "idle" | "running" | "done" | "error";
+type FindInfo = { mode: "live" | "demo"; found: number; tried: number };
 type Recipient = { id: string; email: string; business: string; subject?: string; html?: string; category?: string | null };
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -135,6 +140,11 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // snapshot of the batch actually submitted (so the drafting UI shows the
   // submitted count even if the audience is edited mid-run)
   const [composeBatch, setComposeBatch] = useState({ count: 0, scrape: 0 });
+
+  // ── email finder (scrape addresses for website-only leads via n8n) ──
+  const [findPhase, setFindPhase] = useState<FindPhase>("idle");
+  const [findInfo, setFindInfo] = useState<FindInfo | null>(null);
+  const [findError, setFindError] = useState<string | null>(null);
 
   // ── send ──
   const [sendPhase, setSendPhase] = useState<SendPhase>("idle");
@@ -275,6 +285,73 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     () => pickedTargets.filter((r) => (r.emails?.length ?? 0) === 0).length,
     [pickedTargets],
   );
+  // selected leads the Email Finder can actually work on: no stored address,
+  // but a website whose contact page the automation can scrape
+  const findable = useMemo(
+    () => pickedTargets.filter((r) => (r.emails?.length ?? 0) === 0 && !!r.website),
+    [pickedTargets],
+  );
+
+  // "Find emails" — POST the website-only selection to the n8n Email Finder
+  // (via /api/pipeline/campaigns/find-emails). Found addresses are persisted
+  // onto the lead rows server-side; here they're mirrored into the local rows
+  // so the leads become sendable (and show their best address) immediately.
+  const findEmails = useCallback(async () => {
+    const batch = findable
+      .slice(0, MAX_FIND_LEADS)
+      .map((r) => ({ id: r.id!, website: r.website! }));
+    if (batch.length === 0) return;
+    setFindPhase("running");
+    setFindError(null);
+    setFindInfo(null);
+
+    let res: Response;
+    try {
+      res = await fetch("/api/pipeline/campaigns/find-emails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leads: batch }),
+      });
+    } catch {
+      if (mountedRef.current) {
+        setFindError("Network error reaching the email finder.");
+        setFindPhase("error");
+      }
+      return;
+    }
+    const data = (await res.json().catch(() => null)) as
+      | {
+          ok?: boolean;
+          mode?: "live" | "demo" | "noop";
+          results?: Array<{ id: string; emails: string[] }>;
+          found?: number;
+          error?: string;
+        }
+      | null;
+    if (!mountedRef.current) return;
+    if (!res.ok || !data?.ok) {
+      setFindError(data?.error ?? `The email finder responded ${res.status}.`);
+      setFindPhase("error");
+      return;
+    }
+
+    const results = Array.isArray(data.results) ? data.results : [];
+    setLoad((prev) => {
+      if (prev.status !== "ready") return prev;
+      const byId = new Map(results.map((r) => [r.id, r.emails]));
+      return {
+        ...prev,
+        rows: prev.rows.map((row) => {
+          const emails = row.id ? byId.get(row.id) : undefined;
+          return Array.isArray(emails) && emails.length > 0 && (row.emails?.length ?? 0) === 0
+            ? { ...row, emails }
+            : row;
+        }),
+      };
+    });
+    setFindInfo({ mode: data.mode === "demo" ? "demo" : "live", found: data.found ?? 0, tried: batch.length });
+    setFindPhase("done");
+  }, [findable]);
 
   // the actual send list. AI mode: approved, still-selected, sendable drafts,
   // each carrying its own subject/body; template mode: selected leads with a
@@ -536,6 +613,9 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     setComposePhase("idle");
     setComposeError(null);
     setComposeInfo(null);
+    setFindPhase("idle");
+    setFindInfo(null);
+    setFindError(null);
     setDrafts([]);
     setApproved(new Set());
     setDraftIdx(0);
@@ -589,6 +669,11 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           picked={picked}
           selectedCount={pickedTargets.length}
           scrapeCount={scrapeCount}
+          findableCount={findable.length}
+          findPhase={findPhase}
+          findInfo={findInfo}
+          findError={findError}
+          onFindEmails={findEmails}
           folders={folders}
           folderSel={folderSel}
           folderCounts={folderCounts}
@@ -796,6 +881,11 @@ function AudiencePanel({
   picked,
   selectedCount,
   scrapeCount,
+  findableCount,
+  findPhase,
+  findInfo,
+  findError,
+  onFindEmails,
   folders,
   folderSel,
   folderCounts,
@@ -816,6 +906,11 @@ function AudiencePanel({
   picked: Set<string>;
   selectedCount: number;
   scrapeCount: number;
+  findableCount: number;
+  findPhase: FindPhase;
+  findInfo: FindInfo | null;
+  findError: string | null;
+  onFindEmails: () => void;
   folders: string[];
   folderSel: Set<string>;
   folderCounts: Map<string, number>;
@@ -831,6 +926,18 @@ function AudiencePanel({
   onSwitchToLeads?: () => void;
 }) {
   const noFolders = folderSel.size === 0;
+  const finding = findPhase === "running";
+  // outcome line for the last Find emails run (shown under the lead table)
+  const findNote =
+    findPhase === "error" && findError
+      ? findError
+      : findPhase === "done" && findInfo
+        ? findInfo.mode === "demo"
+          ? "The Email Finder automation isn't connected — add its webhook on the Integrations tab, then try again."
+          : `Found addresses for ${findInfo.found.toLocaleString("en-US")} of ${findInfo.tried.toLocaleString("en-US")} website-only lead${findInfo.tried === 1 ? "" : "s"}.${
+              findInfo.found < findInfo.tried ? " The rest had nothing scrapable — add those by hand in review." : ""
+            }`
+        : null;
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -945,6 +1052,18 @@ function AudiencePanel({
             </>
           )}
 
+          {findNote && (
+            <p
+              role="status"
+              className={cn(
+                "font-mono text-[10.5px] leading-relaxed",
+                findPhase === "error" ? "text-destructive" : "text-muted-foreground",
+              )}
+            >
+              {findNote}
+            </p>
+          )}
+
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p
               className={cn(
@@ -957,18 +1076,38 @@ function AudiencePanel({
                 : selectedCount > MAX_COMPOSE_LEADS
                   ? `AI drafting handles up to ${MAX_COMPOSE_LEADS} leads per run — larger selections use the shared template${scrapeCount > 0 ? `, which skips the ${scrapeCount.toLocaleString("en-US")} without a stored email` : ""}.`
                   : scrapeCount > 0
-                    ? `${scrapeCount.toLocaleString("en-US")} selected lead${scrapeCount === 1 ? " has" : "s have"} no stored email — Claude still drafts them; add an address while reviewing.`
+                    ? `${scrapeCount.toLocaleString("en-US")} selected lead${scrapeCount === 1 ? " has" : "s have"} no stored email — Find emails scans their websites, or add an address while reviewing.`
                     : "Compose drafts each lead with Claude, grounded in its sector knowledge base."}
             </p>
-            <Button
-              data-track="campaign_next_compose"
-              disabled={selectedCount === 0 || selectedCount > MAX_RECIPIENTS}
-              onClick={onContinue}
-              className="gap-1.5"
-            >
-              Compose email
-              <PenLine className="h-4 w-4" aria-hidden />
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {findableCount > 0 && (
+                <Button
+                  variant="outline"
+                  data-track="campaign_find_emails"
+                  disabled={finding}
+                  onClick={onFindEmails}
+                  className="gap-1.5"
+                >
+                  {finding ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" aria-hidden />
+                  ) : (
+                    <Globe className="h-4 w-4" aria-hidden />
+                  )}
+                  {finding
+                    ? "Finding emails…"
+                    : `Find emails (${Math.min(findableCount, MAX_FIND_LEADS).toLocaleString("en-US")})`}
+                </Button>
+              )}
+              <Button
+                data-track="campaign_next_compose"
+                disabled={selectedCount === 0 || selectedCount > MAX_RECIPIENTS}
+                onClick={onContinue}
+                className="gap-1.5"
+              >
+                Compose email
+                <PenLine className="h-4 w-4" aria-hidden />
+              </Button>
+            </div>
           </div>
         </>
       )}

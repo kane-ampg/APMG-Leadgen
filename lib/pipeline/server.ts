@@ -51,8 +51,8 @@ export type WebhookTarget =
  *  paused and nothing is actually sent. */
 export const SETTING_CAMPAIGN_WEBHOOK = "n8n_campaign_webhook_url";
 export const SETTING_CAMPAIGN_ENABLED = "n8n_campaign_webhook_enabled";
-export const SETTING_COMPOSE_WEBHOOK = "n8n_compose_webhook_url";
-export const SETTING_COMPOSE_ENABLED = "n8n_compose_webhook_enabled";
+export const SETTING_EMAIL_FINDER_WEBHOOK = "n8n_email_finder_webhook_url";
+export const SETTING_EMAIL_FINDER_ENABLED = "n8n_email_finder_webhook_enabled";
 /** Enquiry-notification integration: the n8n webhook that emails a landed portal
  *  enquiry to the operator, plus its on/off toggle. Managed on the Integrations
  *  tab like the others. NOTE: stored in app_settings (key/value) — no dedicated
@@ -96,14 +96,14 @@ export function enquiryNotifyWebhook(): Promise<WebhookTarget> {
   return resolveWebhook(SETTING_ENQUIRY_NOTIFY_WEBHOOK, SETTING_ENQUIRY_NOTIFY_ENABLED, "N8N_ENQUIRY_NOTIFY_WEBHOOK_URL");
 }
 
-/** Resolve the n8n compose-email webhook (references/Compose Email Automation.json).
+/** Resolve the n8n email-finder webhook (references/APMG Email Finder.json).
  *  A URL saved from the Integrations tab (app_settings) wins; otherwise the
- *  N8N_COMPOSE_WEBHOOK_URL env var; else demo mode. When set, "Compose email"
- *  POSTs the selected leads there — the automation extracts up to 10 emails per
- *  lead (CSV first, contact-page scrape as the fallback) and has Claude draft a
- *  per-lead email tailored to the CSV Category. */
-export function composeWebhook(): Promise<WebhookTarget> {
-  return resolveWebhook(SETTING_COMPOSE_WEBHOOK, SETTING_COMPOSE_ENABLED, "N8N_COMPOSE_WEBHOOK_URL");
+ *  N8N_EMAIL_FINDER_WEBHOOK_URL env var; else demo mode (no scrape happens).
+ *  When set, "Find emails" POSTs the selected website-only leads there — the
+ *  automation fetches each lead's site + contact page and returns the best
+ *  contact address it finds, which the app stores on the lead. */
+export function emailFinderWebhook(): Promise<WebhookTarget> {
+  return resolveWebhook(SETTING_EMAIL_FINDER_WEBHOOK, SETTING_EMAIL_FINDER_ENABLED, "N8N_EMAIL_FINDER_WEBHOOK_URL");
 }
 
 /** Setting override → env fallback → demo. Invalid URLs are ignored (logged).

@@ -167,6 +167,11 @@ export function htmlToText(html: string): string {
  *  route drafts them sequentially, responding synchronously. */
 export const MAX_COMPOSE_LEADS = 10;
 
+/** Hard cap on leads per "Find emails" run — the n8n Email Finder fetches two
+ *  pages per lead sequentially, so a large batch would outlive the webhook
+ *  round-trip. Mirrored by the workflow (it slices to 50 server-side too). */
+export const MAX_FIND_LEADS = 50;
+
 /** Max stored addresses shown for one lead in the review UI. */
 export const MAX_DRAFT_EMAILS = 10;
 

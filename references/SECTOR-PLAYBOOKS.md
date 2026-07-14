@@ -46,16 +46,15 @@ Effective KB for a lead = `business.md` (repo) + the matched sector's KB
 - `app/api/sector-playbooks/route.ts` — GET config (+ effective KB status) / POST (name, categories).
 - `app/api/sector-playbooks/kb/route.ts` — POST upload `.md` / DELETE revert.
 - `components/apmg/SectorPlaybooksPage.tsx` — the tab.
-- `app/api/pipeline/campaigns/compose/route.ts` — attaches the KB to each lead sent to the n8n compose automation.
-- `references/Compose Email Automation.json` — n8n compose: injects the KB, drafts a property-maintenance email per sector.
+- `app/api/pipeline/campaigns/compose/route.ts` — drafts each lead's email in-app with Claude, grounded in the KB.
 
 ## The email path
 
 1. **Compose** — the compose route resolves each lead's Category → sector, builds
-   the KB (`business.md` + sector KB), and passes it to the n8n compose automation,
-   which drafts a grounded, property-maintenance email per sector.
-2. **Send** — the campaign-send workflow (`Campaign Send Automation.json`) just
-   delivers each email via Gmail (no attachment).
+   the KB (`business.md` + sector KB), and has Claude draft a grounded,
+   property-maintenance email per lead (in-app; no n8n hop).
+2. **Send** — the campaign-send workflow (`APMG Campaign Send (clean).json`) just
+   delivers each email via Gmail.
 
 ## Setup
 

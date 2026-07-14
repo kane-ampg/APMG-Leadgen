@@ -61,16 +61,16 @@ export type Integration = IntegrationMeta & IntegrationState;
  */
 export const INTEGRATIONS: IntegrationMeta[] = [
   {
-    id: "compose-email",
-    settingKey: "n8n_compose_webhook_url",
-    enabledKey: "n8n_compose_webhook_enabled",
-    envVar: "N8N_COMPOSE_WEBHOOK_URL",
-    name: "Compose Email",
+    id: "email-finder",
+    settingKey: "n8n_email_finder_webhook_url",
+    enabledKey: "n8n_email_finder_webhook_enabled",
+    envVar: "N8N_EMAIL_FINDER_WEBHOOK_URL",
+    name: "Email Finder",
     description:
-      "Clicking Compose email sends the selected leads here. The automation extracts up to 10 emails per lead (CSV first, contact-page scrape as the fallback), then Claude drafts a per-lead email tailored to the lead's category.",
+      "Clicking Find emails in Pipeline → Send Campaigns sends the selected leads that have a website but no stored email here. The automation fetches each lead's site and contact page, extracts the best contact address, and returns it to the app, which stores it on the lead.",
     trigger: "webhook",
-    webhookPath: "/webhook/compose-email",
-    workflowFile: "Compose Email Automation.json",
+    webhookPath: "/webhook/email-finder",
+    workflowFile: "APMG Email Finder.json",
   },
   {
     id: "campaign-send",

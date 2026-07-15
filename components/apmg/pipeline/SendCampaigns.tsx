@@ -168,6 +168,17 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // of findInfo so the inline outcome line survives closing it
   const [findSuccessOpen, setFindSuccessOpen] = useState(false);
 
+  // ── batching (selections over the AI cap) ──
+  // "Compose email" splits an over-cap selection into MAX_COMPOSE_LEADS-sized
+  // batches worked one at a time: `picked` collapses to the current batch and
+  // the rest wait here as id lists (audience order). After each send the
+  // success banner offers the next batch. Editing the audience voids the plan
+  // (see the draft-invalidation effect); per-lead exclusion inside a batch is
+  // the drafts-review checkbox, not the audience.
+  const [batchQueue, setBatchQueue] = useState<string[][]>([]);
+  const [batchNo, setBatchNo] = useState(0); // 1-based; 0 = not batching
+  const [batchTotal, setBatchTotal] = useState(0);
+
   // ── send ──
   const [sendPhase, setSendPhase] = useState<SendPhase>("idle");
   const [sentShown, setSentShown] = useState(0);
@@ -482,6 +493,11 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       setApproved(new Set());
       setDraftIdx(0);
       setComposeInfo(null);
+      // the batch plan was cut from the audience these drafts were composed
+      // for — an audience edit voids the queued batches along with the drafts
+      setBatchQueue([]);
+      setBatchNo(0);
+      setBatchTotal(0);
     }
   }, [picked, composePhase]);
 
@@ -518,21 +534,14 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     });
   }
 
-  /** "Compose email" — send the selection to the in-app composer, which drafts
-   *  a per-lead email with Claude grounded in the sector knowledge base for the
-   *  lead's Category. Addresses come from the stored CSV emails (or are added by
-   *  hand in review). Selections above the AI cap fall back to the shared
-   *  template editor. */
-  const startCompose = useCallback(async () => {
-    setSelected(1);
-    if (pickedTargets.length === 0 || pickedTargets.length > MAX_COMPOSE_LEADS) {
-      setDraftMode("template");
-      return;
-    }
+  /** POST one batch of leads to the in-app composer, which drafts a per-lead
+   *  email with Claude grounded in the sector knowledge base for the lead's
+   *  Category. Addresses come from the stored CSV emails (or are added by hand
+   *  in review). Callers guarantee `batch` is within MAX_COMPOSE_LEADS. */
+  const composeLeads = useCallback(async (batch: LeadView[]) => {
     const tag = slugifyCampaign(campaign) || DEFAULT_CAMPAIGN;
     const runId = ++composeRunIdRef.current;
     const live = () => mountedRef.current && runId === composeRunIdRef.current;
-    const batch = pickedTargets;
 
     setDraftMode("ai");
     setComposePhase("running");
@@ -550,7 +559,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           campaign: tag,
-          leads: pickedTargets.map((r) => ({
+          leads: batch.map((r) => ({
             id: r.id!,
             name: r.name,
             website: r.website ?? null,
@@ -598,7 +607,70 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
         }),
       };
     });
-  }, [pickedTargets, campaign]);
+  }, [campaign]);
+
+  /** "Compose email" — draft the current selection with Claude. Selections over
+   *  the AI cap are split into MAX_COMPOSE_LEADS-sized batches (audience order):
+   *  `picked` collapses to the first batch and the rest queue up behind the
+   *  send, offered one at a time from the success banner. */
+  const startCompose = useCallback(() => {
+    setSelected(1);
+    if (pickedTargets.length === 0) {
+      setDraftMode("template");
+      return;
+    }
+    if (pickedTargets.length > MAX_COMPOSE_LEADS) {
+      const chunks: LeadView[][] = [];
+      for (let i = 0; i < pickedTargets.length; i += MAX_COMPOSE_LEADS) {
+        chunks.push(pickedTargets.slice(i, i + MAX_COMPOSE_LEADS));
+      }
+      setBatchQueue(chunks.slice(1).map((c) => c.map((r) => r.id!)));
+      setBatchNo(1);
+      setBatchTotal(chunks.length);
+      setPicked(new Set(chunks[0].map((r) => r.id!)));
+      void composeLeads(chunks[0]);
+      return;
+    }
+    // within the cap: a plain single-batch run — but don't touch the batch
+    // state, so re-drafting the current batch keeps its place in the plan
+    void composeLeads(pickedTargets);
+  }, [pickedTargets, composeLeads]);
+
+  /** Advance to the next queued batch after a send: clear the finished send +
+   *  drafts, collapse `picked` onto the batch, and compose it. */
+  const startNextBatch = useCallback(() => {
+    const nextIds = batchQueue[0];
+    if (!nextIds) return;
+    // map ids back to lead rows, keeping the audience order; leads that
+    // disappeared since the plan was made (deleted, re-imported) just drop out
+    const byId = new Map(targets.map((r) => [r.id!, r]));
+    const next = nextIds.map((id) => byId.get(id)).filter((r): r is LeadView => !!r);
+    if (next.length === 0) {
+      // the whole queued batch no longer exists — drop the stale plan
+      setBatchQueue([]);
+      setBatchNo(0);
+      setBatchTotal(0);
+      return;
+    }
+    setBatchQueue((q) => q.slice(1));
+    setBatchNo((n) => n + 1);
+    // reset the completed send and the previous batch's drafts
+    runIdRef.current++;
+    setSendPhase("idle");
+    setSentShown(0);
+    setSendTotal(0);
+    setResult(null);
+    setError(null);
+    setDrafts([]);
+    setApproved(new Set());
+    setDraftIdx(0);
+    setComposeInfo(null);
+    setComposePhase("idle");
+    composedIdsRef.current = new Set();
+    setPicked(new Set(next.map((r) => r.id!)));
+    setSelected(1);
+    void composeLeads(next);
+  }, [batchQueue, targets, composeLeads]);
 
   function editDraft(id: string, patch: Partial<Pick<ComposeDraft, "subject" | "html" | "best_email">>) {
     setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
@@ -709,14 +781,26 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     setDrafts([]);
     setApproved(new Set());
     setDraftIdx(0);
+    setBatchQueue([]);
+    setBatchNo(0);
+    setBatchTotal(0);
     setPicked(new Set());
     setSelected(0);
   }
 
   const sending = sendPhase === "sending";
+  // batching progress, threaded through the rail + panel headers so the user
+  // always knows which slice of the plan they're working
+  const batchLabel = batchNo > 0 ? `batch ${batchNo} of ${batchTotal}` : null;
   const steps = useMemo<FlowStep[]>(
-    () => buildSteps(pickedTargets.length, sendPhase, draftMode === "ai"),
-    [pickedTargets.length, sendPhase, draftMode],
+    () =>
+      buildSteps(
+        pickedTargets.length,
+        sendPhase,
+        draftMode === "ai",
+        batchNo > 0 ? { no: batchNo, total: batchTotal } : null,
+      ),
+    [pickedTargets.length, sendPhase, draftMode, batchNo, batchTotal],
   );
 
   const liveMessage =
@@ -781,7 +865,14 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     }
     if (selected === 1) {
       if (draftMode === "ai" && composePhase === "running") {
-        return <DraftingPanel count={composeBatch.count} scrapeCount={composeBatch.scrape} reduce={reduce} />;
+        return (
+          <DraftingPanel
+            count={composeBatch.count}
+            scrapeCount={composeBatch.scrape}
+            batchLabel={batchLabel}
+            reduce={reduce}
+          />
+        );
       }
       if (draftMode === "ai" && composePhase === "error") {
         return (
@@ -799,6 +890,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
             approved={approved}
             index={draftIdx}
             info={composeInfo}
+            batchLabel={batchLabel}
             campaignTag={slugifyCampaign(campaign) || DEFAULT_CAMPAIGN}
             onIndex={setDraftIdx}
             onToggle={toggleDraft}
@@ -844,7 +936,23 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       );
     }
     if (sendPhase === "done" && result) {
-      return <SuccessBanner result={result} onReset={resetFlow} />;
+      return (
+        <SuccessBanner
+          result={result}
+          batch={
+            batchNo > 0
+              ? {
+                  no: batchNo,
+                  total: batchTotal,
+                  nextCount: batchQueue[0]?.length ?? 0,
+                  queuedLeads: batchQueue.reduce((n, c) => n + c.length, 0),
+                }
+              : null
+          }
+          onNextBatch={startNextBatch}
+          onReset={resetFlow}
+        />
+      );
     }
     const aiSend = draftMode === "ai" && composePhase === "ready";
     return (
@@ -856,6 +964,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
         ai={aiSend}
         templateReady={aiSend || (subject.trim().length > 0 && body.trim().length > 0)}
         droppedCount={templateDropped}
+        batchLabel={batchLabel}
         onBack={() => setSelected(1)}
         onSend={send}
         sending={sending}
@@ -946,7 +1055,12 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
 
 /* ─────────────────────────────  step status  ───────────────────────────── */
 
-function buildSteps(selectedCount: number, sendPhase: SendPhase, ai: boolean): FlowStep[] {
+function buildSteps(
+  selectedCount: number,
+  sendPhase: SendPhase,
+  ai: boolean,
+  batch: { no: number; total: number } | null,
+): FlowStep[] {
   const sent = sendPhase === "done";
   const s0: StepStatus = selectedCount > 0 ? "done" : "active";
   const s1: StepStatus = sent || sendPhase === "error" ? "done" : selectedCount > 0 ? "active" : "idle";
@@ -959,7 +1073,10 @@ function buildSteps(selectedCount: number, sendPhase: SendPhase, ai: boolean): F
       label: "Audience",
       icon: Target,
       status: s0,
-      detail: selectedCount > 0 ? `${selectedCount.toLocaleString("en-US")} selected` : "Pick recipients",
+      detail:
+        selectedCount > 0
+          ? `${batch ? `Batch ${batch.no}/${batch.total} · ` : ""}${selectedCount.toLocaleString("en-US")} selected`
+          : "Pick recipients",
     },
     {
       id: "compose",
@@ -1088,7 +1205,9 @@ function AudiencePanel({
             onClick={onContinue}
             className="gap-1.5"
           >
-            Compose email
+            {selectedCount > MAX_COMPOSE_LEADS
+              ? `Compose in ${Math.ceil(selectedCount / MAX_COMPOSE_LEADS).toLocaleString("en-US")} batches`
+              : "Compose email"}
             <PenLine className="h-4 w-4" aria-hidden />
           </Button>
           <button
@@ -1209,7 +1328,7 @@ function AudiencePanel({
             {selectedCount > MAX_RECIPIENTS
               ? `Max ${MAX_RECIPIENTS.toLocaleString("en-US")} recipients per send — deselect ${(selectedCount - MAX_RECIPIENTS).toLocaleString("en-US")}.`
               : selectedCount > MAX_COMPOSE_LEADS
-                ? `AI drafting handles up to ${MAX_COMPOSE_LEADS} leads per run — larger selections use the shared template${scrapeCount > 0 ? `, which skips the ${scrapeCount.toLocaleString("en-US")} without a stored email` : ""}.`
+                ? `AI drafting handles ${MAX_COMPOSE_LEADS} leads per run — Compose splits this selection into ${Math.ceil(selectedCount / MAX_COMPOSE_LEADS).toLocaleString("en-US")} batches of up to ${MAX_COMPOSE_LEADS}, drafted, reviewed and sent one after another.`
                 : scrapeCount > 0
                   ? `${scrapeCount.toLocaleString("en-US")} selected lead${scrapeCount === 1 ? " has" : "s have"} no stored email — Find emails scans their websites, or add an address while reviewing.`
                   : "Compose drafts each lead with Claude, grounded in its sector knowledge base."}
@@ -1373,8 +1492,9 @@ function ComposePanel({
             <span className="font-semibold">
               {pickedCount.toLocaleString("en-US")} leads selected — over the {MAX_COMPOSE_LEADS}-lead AI drafting cap.
             </span>{" "}
-            Every recipient will get this one shared template, not a Claude-written email. Go back and trim the
-            selection to {MAX_COMPOSE_LEADS} or fewer to have the AI composer draft each email individually.
+            Every recipient will get this one shared template, not a Claude-written email. Use{" "}
+            <span className="font-semibold">Compose in batches</span> on the Audience step to split the selection
+            into batches of {MAX_COMPOSE_LEADS} Claude-drafted emails, sent one batch at a time.
           </p>
         </div>
       )}
@@ -1459,8 +1579,8 @@ function ComposePanel({
           <span className="text-foreground/80">{leadCount.toLocaleString("en-US")}</span> selected lead
           {leadCount === 1 ? "" : "s"} with a stored email —{" "}
           <span className="text-foreground/80">{droppedCount.toLocaleString("en-US")}</span> website-only lead
-          {droppedCount === 1 ? "" : "s"} {droppedCount === 1 ? "is" : "are"} skipped. Draft with AI ({MAX_COMPOSE_LEADS} or
-          fewer) to write them and add an address in review.
+          {droppedCount === 1 ? "" : "s"} {droppedCount === 1 ? "is" : "are"} skipped. Draft with AI to write them
+          and add an address in review.
         </p>
       )}
 
@@ -1492,10 +1612,24 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 /* ─────────────────────────────  AI drafts  ───────────────────────────── */
 
 /** Shown while Claude drafts each lead's email in-app, grounded in the KB. */
-function DraftingPanel({ count, scrapeCount, reduce }: { count: number; scrapeCount: number; reduce: boolean }) {
+function DraftingPanel({
+  count,
+  scrapeCount,
+  batchLabel,
+  reduce,
+}: {
+  count: number;
+  scrapeCount: number;
+  batchLabel: string | null;
+  reduce: boolean;
+}) {
   return (
     <div className="flex flex-col gap-4">
-      <PhaseHeader icon={Sparkles} title="Drafting with Claude" meta="grounded in the sector KB" />
+      <PhaseHeader
+        icon={Sparkles}
+        title="Drafting with Claude"
+        meta={batchLabel ? `${batchLabel} · grounded in the sector KB` : "grounded in the sector KB"}
+      />
 
       <div className="flex items-end justify-between gap-4">
         <div>
@@ -1572,6 +1706,7 @@ function DraftsReviewPanel({
   approved,
   index,
   info,
+  batchLabel,
   campaignTag,
   onIndex,
   onToggle,
@@ -1586,6 +1721,7 @@ function DraftsReviewPanel({
   approved: Set<string>;
   index: number;
   info: { mode: "live" | "demo"; saved: number; drafted: number } | null;
+  batchLabel: string | null;
   campaignTag: string;
   onIndex: (i: number) => void;
   onToggle: (id: string) => void;
@@ -1613,7 +1749,7 @@ function DraftsReviewPanel({
         <PhaseHeader
           icon={Sparkles}
           title="Review AI drafts"
-          meta={`${approvedCount.toLocaleString("en-US")} of ${drafts.length.toLocaleString("en-US")} selected to send${info?.mode === "demo" ? " · demo drafts" : info && info.drafted < drafts.length ? ` · ${info.drafted.toLocaleString("en-US")} AI-written` : ""}`}
+          meta={`${batchLabel ? `${batchLabel} · ` : ""}${approvedCount.toLocaleString("en-US")} of ${drafts.length.toLocaleString("en-US")} selected to send${info?.mode === "demo" ? " · demo drafts" : info && info.drafted < drafts.length ? ` · ${info.drafted.toLocaleString("en-US")} AI-written` : ""}`}
         />
         <div className="flex items-center gap-2">
           <button
@@ -1826,6 +1962,7 @@ function ReviewPanel({
   ai,
   templateReady,
   droppedCount,
+  batchLabel,
   onBack,
   onSend,
   sending,
@@ -1837,6 +1974,7 @@ function ReviewPanel({
   ai: boolean;
   templateReady: boolean;
   droppedCount: number;
+  batchLabel: string | null;
   onBack: () => void;
   onSend: () => void;
   sending: boolean;
@@ -1851,7 +1989,11 @@ function ReviewPanel({
   const blocked = none || overCap || !templateReady;
   return (
     <div className="flex flex-col gap-4">
-      <PhaseHeader icon={Send} title="Review & send" meta="nothing is sent until you confirm" />
+      <PhaseHeader
+        icon={Send}
+        title="Review & send"
+        meta={batchLabel ? `${batchLabel} · nothing is sent until you confirm` : "nothing is sent until you confirm"}
+      />
 
       <dl className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
         <Stat label="Recipients" value={recipientCount.toLocaleString("en-US")} />
@@ -1901,7 +2043,7 @@ function ReviewPanel({
       {!ai && droppedCount > 0 && (
         <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
           {droppedCount.toLocaleString("en-US")} selected lead{droppedCount === 1 ? "" : "s"} without a stored email{" "}
-          {droppedCount === 1 ? "is" : "are"} skipped — draft with AI ({MAX_COMPOSE_LEADS} or fewer) to add an address in review.
+          {droppedCount === 1 ? "is" : "are"} skipped — draft with AI to add an address in review.
         </p>
       )}
 
@@ -2064,12 +2206,18 @@ function SendingPanel({ sent, total, reduce }: { sent: number; total: number; re
 
 function SuccessBanner({
   result,
+  batch,
+  onNextBatch,
   onReset,
 }: {
   result: { sent: number; mode: SendMode; campaign: string };
+  /** batching progress — set when this send was one batch of a larger selection */
+  batch: { no: number; total: number; nextCount: number; queuedLeads: number } | null;
+  onNextBatch: () => void;
   onReset: () => void;
 }) {
   const demo = result.mode === "demo";
+  const hasNext = !!batch && batch.nextCount > 0;
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-primary/30 bg-primary/[0.04] px-3 py-2.5">
@@ -2079,6 +2227,7 @@ function SuccessBanner({
         <div className="min-w-0">
           <div className="text-[13px] font-semibold text-foreground">
             Sent {result.sent.toLocaleString("en-US")} email{result.sent === 1 ? "" : "s"}
+            {batch ? ` · batch ${batch.no} of ${batch.total}${hasNext ? "" : " — all batches done"}` : ""}
           </div>
           <div className="truncate font-mono text-[10.5px] text-muted-foreground">
             {demo
@@ -2091,6 +2240,30 @@ function SuccessBanner({
           New send
         </Button>
       </div>
+
+      {/* next queued batch — compose it right from the success banner. Nothing
+          is sent until that batch is reviewed and confirmed in turn. */}
+      {hasNext && batch && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-border bg-background/40 px-3 py-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-primary/40 bg-primary/10 text-primary">
+            <Sparkles className="h-4 w-4" aria-hidden />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold text-foreground">
+              {batch.queuedLeads.toLocaleString("en-US")} lead{batch.queuedLeads === 1 ? "" : "s"} still queued
+              {batch.total - batch.no > 1 ? ` across ${(batch.total - batch.no).toLocaleString("en-US")} batches` : ""}
+            </div>
+            <div className="truncate font-mono text-[10.5px] text-muted-foreground">
+              Drafted with Claude, then reviewed and confirmed like this one — nothing sends automatically
+            </div>
+          </div>
+          <Button onClick={onNextBatch} data-track="campaign_next_batch" className="gap-1.5">
+            <Sparkles className="h-4 w-4" aria-hidden />
+            Compose batch {(batch.no + 1).toLocaleString("en-US")} ({batch.nextCount.toLocaleString("en-US")})
+          </Button>
+        </div>
+      )}
+
       <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
         Leads that click the tracked link are marked engaged and flow into the Sales queue, which only shows
         leads that have been emailed.

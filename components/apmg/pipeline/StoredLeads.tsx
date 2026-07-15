@@ -19,6 +19,7 @@ import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { ErrorInline, LeadsTableView, TableSkeleton, type LeadView } from "./LeadsTable";
 import { LeadDetail } from "./LeadDetail";
+import { LeadsExportMenu } from "./LeadsExport";
 
 const EASE = [0.16, 1, 0.3, 1] as const;
 
@@ -124,10 +125,13 @@ function SelectableLeads({
   rows,
   onChanged,
   emptyHint,
+  exportScope,
 }: {
   rows: LeadView[];
   onChanged: () => void;
   emptyHint: string;
+  /** Scope label for exports — the open folder's name, or "All leads". */
+  exportScope: string;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
@@ -156,6 +160,10 @@ function SelectableLeads({
           (r.address ?? "").toLowerCase().includes(term),
       )
     : rows;
+
+  // export exactly what's on screen: checked rows if any, else the filtered view
+  const exportRows =
+    selected.size > 0 ? filtered.filter((r) => r.id && selected.has(r.id)) : filtered;
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -225,18 +233,21 @@ function SelectableLeads({
             </button>
           )}
         </div>
-        {selected.size > 0 && !confirming && (
-          <Button
-            variant="destructive"
-            size="sm"
-            onClick={() => setConfirming(true)}
-            data-track="leads_delete_selected"
-            className="ml-auto gap-1.5"
-          >
-            <Trash2 className="h-3.5 w-3.5" aria-hidden />
-            Delete {selected.size} selected
-          </Button>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          {selected.size > 0 && !confirming && (
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => setConfirming(true)}
+              data-track="leads_delete_selected"
+              className="gap-1.5"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              Delete {selected.size} selected
+            </Button>
+          )}
+          <LeadsExportMenu rows={exportRows} scope={exportScope} selectionCount={selected.size} />
+        </div>
       </div>
 
       {confirming && (
@@ -915,7 +926,12 @@ function FolderDetail({
       {state.status === "error" &&
         (state.needsMigration ? <MigrationCard /> : <ErrorInline message={state.error} onRetry={load} />)}
       {state.status === "ready" && (
-        <SelectableLeads rows={rows} onChanged={handleChanged} emptyHint="This folder is empty." />
+        <SelectableLeads
+          rows={rows}
+          onChanged={handleChanged}
+          emptyHint="This folder is empty."
+          exportScope={folderLabel(batch)}
+        />
       )}
     </div>
   );
@@ -986,6 +1002,7 @@ function FlatLeads() {
           rows={state.rows}
           onChanged={load}
           emptyHint="No leads stored yet. Import a CSV from the Pipeline tab."
+          exportScope="All leads"
         />
       )}
     </div>

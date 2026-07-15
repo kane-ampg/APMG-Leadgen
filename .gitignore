@@ -19,7 +19,8 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# env files
+# env files — .env carries real keys (Anthropic + Supabase service role), never commit it
+.env
 .env*.local
 
 # typescript
@@ -31,3 +32,6 @@ next-env.d.ts
 /references/Aged Care.pdf
 /references/Early.pdf
 /references/Education.pdf
+
+.vercel
+.env*

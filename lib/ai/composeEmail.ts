@@ -54,52 +54,73 @@ export async function draftEmail(
   facts: ComposeLeadFacts,
   kb: string,
   config?: ComposePromptConfig,
+  angle?: string,
 ): Promise<DraftedEmail | null> {
   if (!process.env.ANTHROPIC_API_KEY) return null;
   const knowledge = kb.trim();
   const cfg = config ?? (await loadComposePrompt());
+  // Per-lead writing angle (rotated by the compose route) — appended to the
+  // user message, NOT the system prefix, so the cacheable KB block stays stable
+  // while same-sector emails still come out varied.
+  const leadMessage =
+    renderLeadPrompt(cfg.leadPromptTemplate, facts) +
+    (angle ? `\nAngle to lead with (for variety across this batch): ${angle}` : "");
 
-  try {
-    // Bound a single hung/slow draft (the compose route runs leads sequentially
-    // under a fixed maxDuration); on timeout we degrade to the template.
-    const client = new Anthropic({ timeout: 60_000, maxRetries: 1 });
-    const message = await client.messages.create({
-      // A saved/allow-listed model wins; a bad value can't 404 the whole batch.
-      model: resolveModel(cfg.model),
-      max_tokens: 1500,
-      // The KB is the stable, cacheable tail of the system prefix; same-sector
-      // leads processed back-to-back reuse it (usage.cache_read_input_tokens).
-      system: [
-        { type: "text", text: cfg.instructions },
-        {
-          type: "text",
-          text: knowledge
-            ? `APMG KNOWLEDGE BASE — the only facts you may use:\n\n${knowledge}`
-            : "No knowledge base was available. Use only the general APMG facts stated in the instructions above and do not invent specifics.",
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      messages: [{ role: "user", content: renderLeadPrompt(cfg.leadPromptTemplate, facts) }],
-      output_config: { format: { type: "json_schema", schema: cfg.outputSchema } },
-    });
+  // Bound a single hung/slow draft (the compose route runs a small worker pool
+  // under a fixed maxDuration); on timeout we degrade to the template.
+  // maxRetries 4: the org's API tier allows only a few requests/minute, so
+  // batch drafting routinely trips 429s — the SDK backs off per retry-after
+  // and recovers them, where a single retry used to fall back to the template.
+  const client = new Anthropic({ timeout: 60_000, maxRetries: 4 });
+  // Up to two attempts: the model occasionally fills the forced JSON schema
+  // with literal stub values ({"subject":"placeholder","html":"placeholder"})
+  // instead of writing the email — seen in production on claude-opus-4-8. The
+  // stub guard below catches it and one retry recovers it; a second miss falls
+  // back to the deterministic template.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const message = await client.messages.create({
+        // A saved/allow-listed model wins; a bad value can't 404 the whole batch.
+        model: resolveModel(cfg.model),
+        max_tokens: 1500,
+        // The KB is the stable, cacheable tail of the system prefix; same-sector
+        // leads processed back-to-back reuse it (usage.cache_read_input_tokens).
+        system: [
+          { type: "text", text: cfg.instructions },
+          {
+            type: "text",
+            text: knowledge
+              ? `APMG KNOWLEDGE BASE — the only facts you may use:\n\n${knowledge}`
+              : "No knowledge base was available. Use only the general APMG facts stated in the instructions above and do not invent specifics.",
+            cache_control: { type: "ephemeral" },
+          },
+        ],
+        messages: [{ role: "user", content: leadMessage }],
+        output_config: { format: { type: "json_schema", schema: cfg.outputSchema } },
+      });
 
-    const raw = message.content
-      .map((block) => (block.type === "text" ? block.text : ""))
-      .join("")
-      .trim();
-    if (!raw) return null;
+      const raw = message.content
+        .map((block) => (block.type === "text" ? block.text : ""))
+        .join("")
+        .trim();
+      if (!raw) continue;
 
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object") return null;
-    const o = parsed as Record<string, unknown>;
-    const subject = typeof o.subject === "string" ? o.subject.trim() : "";
-    const html = typeof o.html === "string" ? o.html.trim() : "";
-    if (!subject || !html) return null;
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object") continue;
+      const o = parsed as Record<string, unknown>;
+      const subject = typeof o.subject === "string" ? o.subject.trim() : "";
+      const html = typeof o.html === "string" ? o.html.trim() : "";
+      if (!subject || !html) continue;
+      // Stub guard: a schema-shaped non-answer, or a body with no real HTML
+      // paragraphs, is not a draft.
+      if (/^placeholder$/i.test(subject) || !html.includes("<p")) continue;
 
-    return { subject, html: forceTrackedCta(html) };
-  } catch {
-    // No key / network / auth / rate-limit / malformed JSON — degrade to the
-    // template. One lead failing never aborts the batch.
-    return null;
+      return { subject, html: forceTrackedCta(html) };
+    } catch {
+      // No key / network / auth / rate-limit — a retry mid-batch won't help;
+      // degrade to the template. One lead failing never aborts the batch.
+      return null;
+    }
   }
+  return null;
 }

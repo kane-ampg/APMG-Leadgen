@@ -16,6 +16,7 @@ import {
   MousePointerClick,
   RefreshCw,
   Send,
+  Trash2,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -34,15 +35,24 @@ import {
   type LeadActivityEvent,
   type LeadEventKind,
 } from "@/lib/data/leadActivity";
+import {
+  ackLeadActivity,
+  forgetLeadActivity,
+  ingestLeadActivity,
+  useLeadActivityUnseenByLead,
+} from "@/lib/data/leadActivityNotifications";
 import { formatInt } from "@/lib/format";
 import { adminHeaders, saveAdminKey } from "@/lib/portal/adminKey";
 import { useCountUp } from "@/lib/useCountUp";
 import { Button } from "@/components/ui/button";
 import { Footer } from "./Footer";
 import { Reveal } from "./Reveal";
+import { TelemetryReportExport } from "./TelemetryReportExport";
 
 /**
- * System → Telemetry tab — WHO clicked WHAT. Reads two endpoints on mount:
+ * System → Telemetry tab — WHO clicked WHAT. Reads two endpoints on mount,
+ * then keeps them live with a silent visible-tab poll (POLL_MS) + an instant
+ * refetch on window focus; the Refresh button remains as the loud manual pull:
  *
  *   GET /api/portal/lead-activity → per-lead click trails + anonymous rollup
  *   GET /api/portal/summary       → funnel totals for the KPI row
@@ -55,11 +65,19 @@ import { Reveal } from "./Reveal";
  * Attribution exists because /t/[id] set the apmg_ref cookie; the API
  * allowlists the customer-journey event names on both streams, so internal
  * dashboard click noise (an operator test-clicking a tracked link carries the
- * cookie too) never pollutes a lead's trail or the anonymous block.
+ * cookie too) never pollutes a lead's trail or the anonymous block. On top of
+ * that, browsers that have opened this dashboard carry the apmg_internal
+ * cookie (middleware.ts) and the telemetry writers drop their traffic
+ * entirely — so the operator's own portal browsing and link test-clicks never
+ * enter these trails at all. Client clicks only.
  *
  * Live mode names leads (uuid + business + click trail), so the API requires
  * the shared PORTAL_ADMIN_KEY — same key as the Enquiries tab, entered once
  * on whichever tab asks first (lib/portal/adminKey → localStorage).
+ *
+ * Each row carries a per-row delete (trash → inline confirm strip, the
+ * StoredLeads grammar) that erases that lead's portal_events rows via
+ * DELETE /api/portal/lead-activity?leadId=… — activity only, never the lead.
  *
  * A secondary card aggregates portal visitors with NO attribution cookie —
  * real interest we can't pin to an outreach lead. `mode:"demo"` (no Supabase,
@@ -69,6 +87,11 @@ import { Reveal } from "./Reveal";
  */
 
 const EASE = [0.22, 1, 0.36, 1] as const;
+
+/** Silent background refetch cadence — the page is "realtime" by short poll
+ *  (the app's grammar everywhere else, e.g. useLeadStats; no websocket infra),
+ *  paused while the tab is hidden and topped up on focus. */
+const POLL_MS = 10000;
 
 /* ───────────────────────────  load state  ─────────────────────────── */
 
@@ -390,16 +413,34 @@ function TimelineLine({ ev, last }: { ev: LeadActivityEvent; last: boolean }) {
 
 /* ───────────────────────────  lead row  ─────────────────────────── */
 
+/** This row's delete flow: null = quiet, "confirm" = strip shown, "busy" =
+ *  the DELETE request is in flight. */
+type DeletePhase = "confirm" | "busy" | null;
+
 /** Memoised (ui-standards §5.2): expanding one row must not re-render the
  *  other ninety-nine trails. */
 const LeadRow = memo(function LeadRow({
   lead,
   open,
+  unseen,
   onToggle,
+  deletePhase,
+  deleteError,
+  onDeleteRequest,
+  onDeleteCancel,
+  onDeleteConfirm,
 }: {
   lead: LeadActivity;
   open: boolean;
+  /** New (unacknowledged) customer events on this lead — drives the blinking
+   *  red dot. Cleared by toggling the row (that's the acknowledgement). */
+  unseen: number;
   onToggle: (leadId: string) => void;
+  deletePhase: DeletePhase;
+  deleteError: string | null;
+  onDeleteRequest: (leadId: string) => void;
+  onDeleteCancel: () => void;
+  onDeleteConfirm: (leadId: string) => void;
 }) {
   const reduce = useReducedMotion();
   // The client-dup enquiry event is hidden EVERYWHERE (trail, timeline, event
@@ -410,67 +451,136 @@ const LeadRow = memo(function LeadRow({
 
   return (
     <li className="border-t border-border/70 first:border-t-0">
-      <button
-        type="button"
-        onClick={() => onToggle(lead.leadId)}
-        aria-expanded={open}
-        data-track="telemetry_lead_toggle"
-        data-track-lead={lead.leadId}
-        aria-label={`${name}: ${visible.length} ${visible.length === 1 ? "event" : "events"}, last seen ${fmtWhen(lead.lastSeen)}. ${open ? "Collapse" : "Expand"} timeline`}
-        className="flex w-full flex-col gap-2.5 px-4 py-3.5 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] md:grid md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] md:items-center md:gap-3"
-      >
-        {/* identity: business + sector/campaign chips */}
-        <span className="block min-w-0">
-          <span className="flex min-w-0 items-center gap-2">
-            <span
-              className={cn(
-                "truncate text-[13px] font-medium",
-                lead.business ? "text-foreground" : "font-mono text-muted-foreground",
+      {/* Row header: the expand toggle and the delete affordance are SIBLING
+          buttons (a button can't nest a button), fused by the flex wrapper. */}
+      <div className="flex items-stretch">
+        <button
+          type="button"
+          onClick={() => {
+            // Toggling the row IS the acknowledgement — the blinking dot (and
+            // its share of the nav badge) falls away once the operator looks.
+            ackLeadActivity(lead.leadId, lead.lastSeen);
+            onToggle(lead.leadId);
+          }}
+          aria-expanded={open}
+          data-track="telemetry_lead_toggle"
+          data-track-lead={lead.leadId}
+          aria-label={`${name}: ${visible.length} ${visible.length === 1 ? "event" : "events"}${unseen > 0 ? ` (${unseen} new)` : ""}, last seen ${fmtWhen(lead.lastSeen)}. ${open ? "Collapse" : "Expand"} timeline`}
+          className="flex min-w-0 flex-1 flex-col gap-2.5 px-4 py-3.5 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] md:grid md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] md:items-center md:gap-3"
+        >
+          {/* identity: business + sector/campaign chips */}
+          <span className="block min-w-0">
+            <span className="flex min-w-0 items-center gap-2">
+              {/* new-activity dot: blinks until the row is toggled (acked) */}
+              {unseen > 0 && (
+                <span
+                  aria-hidden
+                  title={`${unseen} new ${unseen === 1 ? "event" : "events"}`}
+                  className="h-2 w-2 shrink-0 rounded-full bg-primary-solid motion-safe:animate-notify-blink"
+                />
               )}
-            >
-              {name}
+              <span
+                className={cn(
+                  "truncate text-[13px] font-medium",
+                  lead.business ? "text-foreground" : "font-mono text-muted-foreground",
+                )}
+              >
+                {name}
+              </span>
+              {enquired && (
+                <span className="inline-flex shrink-0 items-center rounded-full bg-primary-solid px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.08em] text-primary-foreground">
+                  Enquired
+                </span>
+              )}
             </span>
-            {enquired && (
-              <span className="inline-flex shrink-0 items-center rounded-full bg-primary-solid px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.08em] text-primary-foreground">
-                Enquired
-              </span>
-            )}
+            <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
+              {lead.category && (
+                <span className="inline-flex max-w-full items-center truncate rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {lead.category}
+                </span>
+              )}
+              {lead.campaign && (
+                <span className="inline-flex max-w-full items-center truncate rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary">
+                  {lead.campaign}
+                </span>
+              )}
+            </span>
           </span>
-          <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
-            {lead.category && (
-              <span className="inline-flex max-w-full items-center truncate rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                {lead.category}
-              </span>
-            )}
-            {lead.campaign && (
-              <span className="inline-flex max-w-full items-center truncate rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary">
-                {lead.campaign}
-              </span>
-            )}
-          </span>
-        </span>
 
-        {/* the trail itself */}
-        <EventTrail events={visible} />
+          {/* the trail itself */}
+          <EventTrail events={visible} />
 
-        {/* meta: event count · last seen · expand cue */}
-        <span className="flex shrink-0 items-center justify-between gap-3 md:justify-end">
-          <span
-            className="tnum font-mono text-[10.5px] text-muted-foreground"
-            title={fmtStamp(lead.lastSeen)}
-          >
-            {formatInt(visible.length)} {visible.length === 1 ? "event" : "events"} ·{" "}
-            {fmtWhen(lead.lastSeen)}
+          {/* meta: event count · last seen · expand cue */}
+          <span className="flex shrink-0 items-center justify-between gap-3 md:justify-end">
+            <span
+              className="tnum font-mono text-[10.5px] text-muted-foreground"
+              title={fmtStamp(lead.lastSeen)}
+            >
+              {formatInt(visible.length)} {visible.length === 1 ? "event" : "events"} ·{" "}
+              {fmtWhen(lead.lastSeen)}
+            </span>
+            <ChevronDown
+              className={cn(
+                "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
+                open && "rotate-180",
+              )}
+              aria-hidden
+            />
           </span>
-          <ChevronDown
-            className={cn(
-              "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200",
-              open && "rotate-180",
-            )}
-            aria-hidden
-          />
-        </span>
-      </button>
+        </button>
+
+        {/* per-row delete: quiet trash that only turns destructive on hover;
+            the actual delete sits behind the confirm strip below. */}
+        <button
+          type="button"
+          onClick={() => (deletePhase ? onDeleteCancel() : onDeleteRequest(lead.leadId))}
+          disabled={deletePhase === "busy"}
+          aria-label={`Delete ${name}'s click activity`}
+          data-track="telemetry_lead_delete"
+          data-track-lead={lead.leadId}
+          className="flex shrink-0 items-center border-l border-border/70 px-3 text-muted-foreground/70 outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] disabled:pointer-events-none disabled:opacity-50"
+        >
+          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      </div>
+
+      {/* inline destructive confirm (StoredLeads grammar) — a stray click on
+          the trash can't wipe a trail; Delete here is the real action. */}
+      {deletePhase && (
+        <div className="flex flex-wrap items-center gap-2 border-t border-destructive/40 bg-destructive/[0.04] px-4 py-2">
+          <Trash2 className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
+          <span className="text-[12px] text-foreground">
+            Permanently delete {name}&rsquo;s click activity?
+          </span>
+          {deleteError && (
+            <span role="alert" className="font-mono text-[10.5px] text-destructive">
+              {deleteError}
+            </span>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onDeleteCancel}
+              disabled={deletePhase === "busy"}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => onDeleteConfirm(lead.leadId)}
+              disabled={deletePhase === "busy"}
+              data-track="telemetry_lead_delete_confirm"
+              data-track-lead={lead.leadId}
+              className="gap-1.5"
+            >
+              <Trash2 className="h-3.5 w-3.5" aria-hidden />
+              {deletePhase === "busy" ? "Deleting…" : "Delete"}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* expanded full timeline */}
       <AnimatePresence initial={false}>
@@ -641,9 +751,23 @@ interface SummaryPayload {
 export function TelemetryPage() {
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  /** Per-lead NEW (unacknowledged) event counts — the blinking row dots. */
+  const unseenByLead = useLeadActivityUnseenByLead();
+  /** True while a MANUAL refresh is in flight — the page stays "ready" during
+   *  one, so the button needs its own flag to spin (feedback that the click
+   *  landed even when the data comes back unchanged). */
+  const [refreshing, setRefreshing] = useState(false);
   /** Access-key field shown when the lead-activity API answers 401. */
   const [keyInput, setKeyInput] = useState("");
+  /** At most ONE row's delete flow is open at a time. */
+  const [deleteFlow, setDeleteFlow] = useState<{
+    id: string;
+    busy: boolean;
+    error: string | null;
+  } | null>(null);
   const mountedRef = useRef(true);
+  /** Mirror of `mode` for the delete callback (kept stable with [] deps). */
+  const demoRef = useRef(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -652,8 +776,22 @@ export function TelemetryPage() {
     };
   }, []);
 
-  const fetchAll = useCallback(async () => {
+  /** Refetch both endpoints. `silent` marks the background/realtime polls:
+   *  a ready page must never flip to a skeleton or an error screen over one
+   *  transient blip — realtime degrades to "slightly stale", not to red. */
+  const fetchAll = useCallback(async (opts?: { silent?: boolean }) => {
+    const silent = opts?.silent === true;
     setLoad((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
+    /** Error/skeleton states only land when the page isn't already showing data
+     *  (or the operator explicitly asked via Refresh/Retry — non-silent). */
+    const fail = (next: LoadState) =>
+      setLoad((prev) => (silent && prev.status === "ready" ? prev : next));
+    /** Ready states swap in only when the payload actually changed — polling
+     *  every few seconds must not re-render ~100 memoised rows for nothing. */
+    const settle = (next: LoadState) =>
+      setLoad((prev) =>
+        prev.status === "ready" && JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
+      );
     try {
       const [actRes, sumRes] = await Promise.all([
         fetch("/api/portal/lead-activity", { cache: "no-store", headers: adminHeaders() }),
@@ -671,7 +809,7 @@ export function TelemetryPage() {
       // present, portal_inquiries missing → summary demo, activity live) still
       // gets the truthful "run the SQL" banner, not "connect Supabase".
       if (act?.mode === "demo" || sum?.mode === "demo") {
-        setLoad({
+        settle({
           status: "ready",
           mode: "demo",
           needsMigration: act?.needsMigration === true || sum?.needsMigration === true,
@@ -684,7 +822,7 @@ export function TelemetryPage() {
       // 401 = the shared-secret gate on the per-lead read — surface the access
       // key prompt instead of a dead-end error.
       if (actRes.status === 401) {
-        setLoad({
+        fail({
           status: "error",
           unauthorized: true,
           error: act?.error ?? "An access key is required to view lead activity.",
@@ -692,14 +830,14 @@ export function TelemetryPage() {
         return;
       }
       if (!actRes.ok || !act) {
-        setLoad({
+        fail({
           status: "error",
           error: act?.error ?? `Couldn't load lead activity (${actRes.status}).`,
         });
         return;
       }
       if (!sumRes.ok || !sum?.totals) {
-        setLoad({
+        fail({
           status: "error",
           error: sum?.error ?? `Couldn't load the portal summary (${sumRes.status}).`,
         });
@@ -708,7 +846,10 @@ export function TelemetryPage() {
       const leads = (Array.isArray(act.leads) ? act.leads : [])
         .map(toLead)
         .filter((l): l is LeadActivity => l !== null);
-      setLoad({
+      // Feed the notification store the same data this page renders so the
+      // row dots / nav badge never lag behind what's on screen.
+      ingestLeadActivity(leads);
+      settle({
         status: "ready",
         mode: "live",
         needsMigration: false,
@@ -723,13 +864,41 @@ export function TelemetryPage() {
       });
     } catch {
       if (mountedRef.current) {
-        setLoad({ status: "error", error: "Network error loading click activity." });
+        fail({ status: "error", error: "Network error loading click activity." });
       }
     }
   }, []);
 
   useEffect(() => {
     fetchAll();
+  }, [fetchAll]);
+
+  /** The Refresh button's loud pull — spins the icon for the whole round trip. */
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await fetchAll();
+    } finally {
+      if (mountedRef.current) setRefreshing(false);
+    }
+  }, [fetchAll]);
+
+  // Realtime: silent background poll while the tab is visible, plus an
+  // immediate pull the moment the window regains focus/visibility. Silent so
+  // mid-session blips never flash skeletons or error screens — the Refresh
+  // button stays as the loud on-demand pull.
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState === "visible") fetchAll({ silent: true });
+    };
+    const id = setInterval(tick, POLL_MS);
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", tick);
+    };
   }, [fetchAll]);
 
   const toggleLead = useCallback((leadId: string) => {
@@ -741,8 +910,74 @@ export function TelemetryPage() {
     });
   }, []);
 
+  /* ── per-row delete flow ─────────────────────────────────────────────── */
+
+  const requestDelete = useCallback((leadId: string) => {
+    setDeleteFlow({ id: leadId, busy: false, error: null });
+  }, []);
+
+  const cancelDelete = useCallback(() => {
+    setDeleteFlow((prev) => (prev?.busy ? prev : null));
+  }, []);
+
+  /** Drop one lead's rows client-side (shared by the live and demo paths). */
+  const removeLeadLocally = useCallback((leadId: string) => {
+    // Deleted activity can't stay "new" — clear its dot/badge share too.
+    forgetLeadActivity(leadId);
+    setDeleteFlow(null);
+    setExpanded((prev) => {
+      if (!prev.has(leadId)) return prev;
+      const next = new Set(prev);
+      next.delete(leadId);
+      return next;
+    });
+    setLoad((prev) =>
+      prev.status === "ready"
+        ? { ...prev, leads: prev.leads.filter((l) => l.leadId !== leadId) }
+        : prev,
+    );
+  }, []);
+
+  const confirmDelete = useCallback(
+    async (leadId: string) => {
+      // Demo rows are a client constant (ids aren't uuids, and a refetch would
+      // resurrect them) — just drop the row locally so the control still works.
+      if (demoRef.current) {
+        removeLeadLocally(leadId);
+        return;
+      }
+      setDeleteFlow({ id: leadId, busy: true, error: null });
+      try {
+        const res = await fetch(`/api/portal/lead-activity?leadId=${encodeURIComponent(leadId)}`, {
+          method: "DELETE",
+          headers: adminHeaders(),
+        });
+        const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+        if (!mountedRef.current) return;
+        if (!res.ok || !data?.ok) {
+          setDeleteFlow({
+            id: leadId,
+            busy: false,
+            error: data?.error ?? `Delete failed (${res.status}).`,
+          });
+          return;
+        }
+        removeLeadLocally(leadId);
+        // The rows are gone server-side too, so a silent refetch can only
+        // agree — it's here to pull the KPI totals back in line.
+        fetchAll({ silent: true });
+      } catch {
+        if (mountedRef.current) {
+          setDeleteFlow({ id: leadId, busy: false, error: "Network error during delete." });
+        }
+      }
+    },
+    [fetchAll, removeLeadLocally],
+  );
+
   const ready = load.status === "ready" ? load : null;
   const leads = ready?.leads ?? [];
+  demoRef.current = ready?.mode === "demo";
 
   // Funnel gauges: engaged leads → clicks → browsing → conversions.
   const stats = useMemo<TelemetryStat[]>(() => {
@@ -819,14 +1054,18 @@ export function TelemetryPage() {
                 {lastSignal ? fmtWhen(lastSignal) : "—"}
               </div>
             </div>
+            <TelemetryReportExport demo={ready?.mode === "demo"} />
             <button
               type="button"
-              onClick={() => fetchAll()}
+              onClick={() => refresh()}
               data-track="telemetry_refresh"
               className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
             >
               <RefreshCw
-                className={cn("h-3.5 w-3.5", load.status === "loading" && "animate-spin")}
+                className={cn(
+                  "h-3.5 w-3.5",
+                  (refreshing || load.status === "loading") && "animate-spin",
+                )}
                 aria-hidden
               />
               Refresh
@@ -956,7 +1195,19 @@ export function TelemetryPage() {
                         key={lead.leadId}
                         lead={lead}
                         open={expanded.has(lead.leadId)}
+                        unseen={unseenByLead.get(lead.leadId) ?? 0}
                         onToggle={toggleLead}
+                        deletePhase={
+                          deleteFlow?.id === lead.leadId
+                            ? deleteFlow.busy
+                              ? "busy"
+                              : "confirm"
+                            : null
+                        }
+                        deleteError={deleteFlow?.id === lead.leadId ? deleteFlow.error : null}
+                        onDeleteRequest={requestDelete}
+                        onDeleteCancel={cancelDelete}
+                        onDeleteConfirm={confirmDelete}
                       />
                     ))}
                   </ul>

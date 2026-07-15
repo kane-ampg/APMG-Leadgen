@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isUuid, supabaseTarget } from "@/lib/pipeline/server";
-import { insertPortalEvents, lookupLead } from "@/lib/portal/server";
+import { insertPortalEvents, isInternalRequest, lookupLead } from "@/lib/portal/server";
 
 /**
  * Email attribution hook. The automation's outreach email links its CTA to
@@ -53,16 +53,25 @@ export async function GET(
   const campaign = url.searchParams.get("c") ?? "outreach";
   const destination = safeDestination(url.searchParams.get("to"), url.origin);
 
+  // Operator test-click (browser marked internal by the admin dashboard —
+  // middleware.ts): redirect as normal so links stay testable, but record
+  // NOTHING and clear any attribution the browser already carries. Otherwise
+  // one test-click writes a fake attribution_click, falsely flips the lead's
+  // "Engaged" badge, and stamps apmg_ref so every later self-click lands in
+  // that lead's Telemetry trail.
+  const internal = isInternalRequest(req);
+
   // Always-on operator trace (and the only record in demo mode).
   console.info("[attribution] lead click", {
     lead: id,
     campaign,
+    internal,
     ts: new Date().toISOString(),
     ua: req.headers.get("user-agent") ?? undefined,
   });
 
   const target = supabaseTarget();
-  if (target.state === "ok" && isUuid(id)) {
+  if (!internal && target.state === "ok" && isUuid(id)) {
     // Persist before redirecting — serverless runtimes can kill work left
     // pending after the response, and a click is a one-shot signal.
     await Promise.allSettled([
@@ -72,6 +81,13 @@ export async function GET(
   }
 
   const res = NextResponse.redirect(new URL(destination, url.origin), { status: 302 });
+  if (internal) {
+    // Un-attribute the operator's browser (a pre-fix test-click may have
+    // stamped these) instead of refreshing the 90-day attribution window.
+    res.cookies.delete("apmg_ref");
+    res.cookies.delete("apmg_ref_campaign");
+    return res;
+  }
   res.cookies.set("apmg_ref", id, {
     httpOnly: true,
     sameSite: "lax",

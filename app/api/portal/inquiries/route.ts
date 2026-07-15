@@ -10,6 +10,7 @@ import {
 import {
   INQUIRY_STATUSES,
   insertPortalEvents,
+  isInternalRequest,
   isMissingPortalTable,
   lookupLead,
   portalAdminAuthorized,
@@ -27,6 +28,7 @@ import { isPlaceholderLegal, isValidVersion } from "@/lib/legal/legalDocs";
 //           as the canonical `portal_inquiry` event in portal_events.
 //   GET   — newest-first listing (limit 200) for the admin Enquiries tab.
 //   PATCH — status workflow (new → contacted → closed) from the same tab.
+//   DELETE— remove a single enquiry (operator test rows / spam) by ?id=.
 // Server-side (keeps the service role key off the browser).
 //
 // SECURITY — POST is public by design (it's the customer form target, screened
@@ -164,9 +166,18 @@ export async function POST(req: Request): Promise<Response> {
       { status: 409 },
     );
   }
+  // Operator test submission (browser marked internal by the admin dashboard —
+  // middleware.ts): keep the enquiry row so the flow stays testable end-to-end
+  // (it's visible and deletable on the Enquiries tab), but strip attribution
+  // and skip the canonical funnel event below — a test enquiry must never
+  // appear in a lead's Telemetry trail or the enquiry totals.
+  const internal = isInternalRequest(req);
+
   // Attribution enrichment: snapshot the lead's name + CSV category now (leads
   // get reimported/deleted, so a join-at-read-time would rot).
-  const { leadId, campaign } = readAttribution(req);
+  const { leadId, campaign } = internal
+    ? { leadId: null, campaign: null }
+    : readAttribution(req);
   const lead = leadId ? await lookupLead(target.base, target.key, leadId) : null;
 
   let res: Response;
@@ -215,22 +226,27 @@ export async function POST(req: Request): Promise<Response> {
   const rawId = Array.isArray(rows) ? rows[0]?.id : undefined;
   const id = isUuid(rawId) ? rawId : null;
 
-  // Canonical server-side count: one `portal_inquiry` event per stored enquiry.
-  // Best-effort — the enquiry row above is the source of truth, so a telemetry
-  // hiccup here is logged (inside insertPortalEvents) and otherwise ignored.
-  await insertPortalEvents(target.base, target.key, [
-    {
-      event: "portal_inquiry",
-      // consent_version rides in props so the canonical funnel event also
-      // carries the accepted-terms version (queryable in the admin telemetry).
-      props: { service, consent_version: legal.version },
-      lead_id: leadId,
-      campaign,
-      category: lead?.category ?? null,
-      ua: req.headers.get("user-agent")?.slice(0, 400) ?? null,
-      referer: req.headers.get("referer")?.slice(0, 600) ?? null,
-    },
-  ]);
+  // Canonical server-side count: one `portal_inquiry` event per stored enquiry
+  // — skipped for internal (operator test) submissions so the funnel counts
+  // clients only (the notification below still fires, so the whole flow stays
+  // testable). Best-effort — the enquiry row above is the source of truth, so
+  // a telemetry hiccup here is logged (inside insertPortalEvents) and
+  // otherwise ignored.
+  if (!internal) {
+    await insertPortalEvents(target.base, target.key, [
+      {
+        event: "portal_inquiry",
+        // consent_version rides in props so the canonical funnel event also
+        // carries the accepted-terms version (queryable in the admin telemetry).
+        props: { service, consent_version: legal.version },
+        lead_id: leadId,
+        campaign,
+        category: lead?.category ?? null,
+        ua: req.headers.get("user-agent")?.slice(0, 400) ?? null,
+        referer: req.headers.get("referer")?.slice(0, 600) ?? null,
+      },
+    ]);
+  }
 
   // Email the enquiry to the operator's configured notification address via the
   // n8n Enquiry Notification workflow. Entirely best-effort and fire-and-forget:
@@ -391,4 +407,69 @@ export async function PATCH(req: Request): Promise<Response> {
   }
 
   return Response.json({ ok: true, mode: "live" });
+}
+
+// Remove a single enquiry (?id=<uuid>) — for clearing operator test submissions
+// and spam off the Enquiries tab. Deletes the portal_inquiries row only; any
+// canonical portal_inquiry funnel event is left untouched (operator test rows
+// never created one, and erasing a real customer's history is a separate,
+// deliberate act via the Telemetry tab's activity delete). Same gates as
+// GET/PATCH: sameOrigin floor + PORTAL_ADMIN_KEY shared secret — destroying a
+// PII row is at least as sensitive as reading it.
+export async function DELETE(req: Request): Promise<Response> {
+  if (!sameOrigin(req)) {
+    return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
+  }
+
+  const target = supabaseTarget();
+  if (target.state === "demo") {
+    // Demo rows are a client-side constant (their ids aren't uuids) — nothing
+    // to delete server-side; the tab drops the row locally.
+    return Response.json({ ok: true, mode: "demo" });
+  }
+
+  const id = new URL(req.url).searchParams.get("id");
+  // isUuid also makes the eq. interpolation safe (uuids never need quoting).
+  if (!isUuid(id)) {
+    return Response.json({ ok: false, error: "Invalid enquiry id." }, { status: 400 });
+  }
+  if (!portalAdminAuthorized(req)) {
+    return Response.json({ ...UNAUTHORIZED, mode: "live" }, { status: 401 });
+  }
+  if (target.state === "misconfigured") {
+    console.error("[portal/inquiries] SUPABASE_URL is not a valid URL.");
+    return Response.json({ ok: false, error: "Portal storage is misconfigured." }, { status: 500 });
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${target.base}/rest/v1/${TABLE}?id=eq.${id}&select=id`, {
+      method: "DELETE",
+      headers: {
+        apikey: target.key,
+        Authorization: `Bearer ${target.key}`,
+        Prefer: "return=representation", // so a vanished row still answers ok:true below
+      },
+    });
+  } catch (e) {
+    console.error("[portal/inquiries] delete fetch failed:", e);
+    return Response.json({ ok: false, error: "Could not reach the database." }, { status: 502 });
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    console.error(`[portal/inquiries] Supabase DELETE ${res.status}:`, detail.slice(0, 1000));
+    if (isMissingPortalTable(res.status, detail)) {
+      return Response.json(
+        { ok: false, needsMigration: true, error: "Run supabase/portal-telemetry.sql to create the enquiries table." },
+        { status: 422 },
+      );
+    }
+    return Response.json({ ok: false, error: "Couldn't delete the enquiry." }, { status: 502 });
+  }
+
+  // Zero rows back = already gone (double-click, second tab) — that's still
+  // the outcome the admin asked for, so it's ok:true either way.
+  const rows = await res.json().catch(() => []);
+  return Response.json({ ok: true, mode: "live", deleted: Array.isArray(rows) ? rows.length : 0 });
 }

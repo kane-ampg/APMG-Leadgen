@@ -41,6 +41,22 @@ const PORTAL_ALLOW = [
   "/api/portal/", // events, inquiries, summary, lead-activity
 ];
 
+/**
+ * Operator-browser marker (mirrors INTERNAL_COOKIE in lib/portal/server.ts —
+ * that module is node-only, and middleware runs on the Edge runtime, so the
+ * name is duplicated rather than imported; keep them in sync).
+ *
+ * Any browser that loads an admin DASHBOARD page gets this cookie — customer
+ * hosts never serve those pages, and no client ever browses the console — so
+ * "has apmg_internal" is a reliable "this is the operator" signal. The
+ * telemetry writers (/api/portal/events, /t/[id], the enquiry event) check it
+ * and drop attribution/rows, so the operator clicking their own app (portal
+ * previews, test-clicks on tracked links) can't pollute the Telemetry tab's
+ * lead trails or funnel totals with self-traffic.
+ */
+const INTERNAL_COOKIE = "apmg_internal";
+const INTERNAL_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
+
 function isCustomerHost(host: string): boolean {
   const h = host.toLowerCase().split(":")[0]; // strip any port
   if (CUSTOMER_HOSTS.includes(h)) return true;
@@ -57,8 +73,29 @@ export function middleware(req: NextRequest) {
   const host = req.headers.get("host") || "";
   const { pathname } = req.nextUrl;
 
-  // Not a customer host -> full app (admin project, local dev). Unchanged.
-  if (!isCustomerHost(host)) return NextResponse.next();
+  // Not a customer host -> full app (admin project, local dev).
+  if (!isCustomerHost(host)) {
+    // Dashboard PAGE loads mark the browser internal (see INTERNAL_COOKIE).
+    // Portal paths are excluded on purpose — previewing /portal or clicking a
+    // /t/ link must not mark anyone, or a real client landing here (e.g. dev /
+    // single-project setups) would be silently dropped from telemetry.
+    if (
+      !isPortalPath(pathname) &&
+      !pathname.startsWith("/api/") &&
+      !req.cookies.has(INTERNAL_COOKIE)
+    ) {
+      const res = NextResponse.next();
+      res.cookies.set(INTERNAL_COOKIE, "1", {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        path: "/",
+        maxAge: INTERNAL_COOKIE_MAX_AGE,
+      });
+      return res;
+    }
+    return NextResponse.next();
+  }
 
   // Customer host: only portal surface is allowed.
   if (isPortalPath(pathname)) return NextResponse.next();

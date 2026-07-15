@@ -9,10 +9,10 @@ import {
   safeCampaignTag,
   trackedLink,
 } from "@/lib/pipeline/campaign";
-import { campaignWebhook, sameOrigin, supabaseTarget, webhookAuthHeaders } from "@/lib/pipeline/server";
+import { campaignWebhook, isUuid, sameOrigin, supabaseTarget, webhookAuthHeaders } from "@/lib/pipeline/server";
 import { loadPlaybooks, playbookPdfUrl } from "@/lib/pipeline/sectorStore";
 import { resolveSectorForCategory } from "@/lib/pipeline/sectors";
-import { fetchSuppressedEmails } from "@/lib/portal/server";
+import { fetchSuppressedEmails, insertPortalEvents } from "@/lib/portal/server";
 
 // Sends an outreach email campaign to a set of stored leads. Each message's CTA
 // is rewritten to the attribution hook /t/<leadId>?c=<campaign> (app/t/[id]),
@@ -31,9 +31,20 @@ import { fetchSuppressedEmails } from "@/lib/portal/server";
 // has only a same-origin (CSRF) floor, NOT real auth. The UI gates the action
 // behind the `campaigns.send` permission; enforce it here too once auth lands.
 //
+// After a live send, one `email_sent` row per recipient is recorded in
+// portal_events (lead_id + campaign + category) — that's what the Telemetry
+// report's "emails sent in period" numbers are built from. Best-effort: a
+// failed insert never fails the send. The telemetry reads are allowlist-based
+// (attribution_click/portal_view/…), so these rows never pollute lead trails
+// or funnel totals.
+//
 // TODO(supabase): after a live send, stamp leads.email_sent = true /
 // email_sent_at = now for each recipient so the Sales-queue gate is persisted.
 export const runtime = "nodejs";
+
+/** The send-ledger event name (portal_events). Keep in sync with
+ *  /api/portal/report, which aggregates it per period. */
+const SENT_EVENT = "email_sent";
 
 const MAX_SUBJECT = 300;
 const MAX_HTML = 20_000;
@@ -240,6 +251,24 @@ export async function POST(req: Request): Promise<Response> {
     const detail = await res.text().catch(() => "");
     console.error(`[pipeline/campaigns] n8n webhook ${res.status}:`, detail.slice(0, 1000));
     return json({ ok: false, sent: 0, mode: "live", error: "The automation rejected the campaign." }, 502);
+  }
+
+  // Send ledger: one email_sent row per delivered recipient, so period reports
+  // can answer "how many emails went out this week/month". Best-effort — the
+  // campaign was already accepted by the automation, so a ledger hiccup only
+  // logs; it never turns a successful send into an error.
+  if (sb.state === "ok") {
+    await insertPortalEvents(
+      sb.base,
+      sb.key,
+      recipients.map((r) => ({
+        event: SENT_EVENT,
+        props: {},
+        lead_id: isUuid(r.id) ? r.id : null,
+        campaign,
+        category: r.category,
+      })),
+    );
   }
 
   return json({ ok: true, sent: messages.length, mode: "live", campaign, suppressed: suppressedCount });

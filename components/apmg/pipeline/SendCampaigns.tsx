@@ -28,7 +28,9 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { useFocusTrap } from "@/lib/useFocusTrap";
 import {
+  alternateEmails,
   bestEmail,
   DEFAULT_BODY_HTML,
   DEFAULT_CAMPAIGN,
@@ -38,6 +40,7 @@ import {
   MAX_FIND_LEADS,
   MAX_RECIPIENTS,
   MERGE_TOKENS,
+  MIN_SEND_EMAILS,
   renderBody,
   renderSubject,
   slugifyCampaign,
@@ -70,7 +73,17 @@ type DraftMode = "template" | "ai";
 // Email finding via the n8n Email Finder (app/api/pipeline/campaigns/find-emails)
 type FindPhase = "idle" | "running" | "done" | "error";
 type FindInfo = { mode: "live" | "demo"; found: number; tried: number };
-type Recipient = { id: string; email: string; business: string; subject?: string; html?: string; category?: string | null };
+type Recipient = {
+  id: string;
+  email: string;
+  business: string;
+  subject?: string;
+  html?: string;
+  category?: string | null;
+  /** a top-up recipient: the lead's 2nd/3rd stored address, added because the
+   *  send resolved fewer than MIN_SEND_EMAILS addresses (same email content) */
+  alt?: boolean;
+};
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -88,6 +101,12 @@ function draftSendable(d: ComposeDraft): boolean {
 /** Resolve the host the tracked CTA links point at (build-pinned or this origin). */
 function trackBase(): string {
   return process.env.NEXT_PUBLIC_TRACK_BASE || (typeof window !== "undefined" ? window.location.origin : "");
+}
+
+/** Shared srcDoc wrapper for the sandboxed email previews (compose editor,
+ *  drafts review, and the per-recipient review list before sending). */
+function emailPreviewDoc(inner: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><base target="_blank"><style>body{margin:0;padding:18px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.55;color:#1a1a1a;background:#fff}p{margin:0 0 14px}a{color:#c8102e;font-weight:600;text-decoration:underline}</style></head><body>${inner}</body></html>`;
 }
 
 type LoadState =
@@ -145,6 +164,9 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   const [findPhase, setFindPhase] = useState<FindPhase>("idle");
   const [findInfo, setFindInfo] = useState<FindInfo | null>(null);
   const [findError, setFindError] = useState<string | null>(null);
+  // success modal: shown once after a live run completes, dismissed independently
+  // of findInfo so the inline outcome line survives closing it
+  const [findSuccessOpen, setFindSuccessOpen] = useState(false);
 
   // ── send ──
   const [sendPhase, setSendPhase] = useState<SendPhase>("idle");
@@ -262,7 +284,10 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   }, [folders]);
 
   const term = q.trim().toLowerCase();
-  // leads are scoped to the chosen folders — nothing shows until one is picked
+  // leads are scoped to the chosen folders — nothing shows until one is picked.
+  // Leads with a stored email sort to the top, website-only leads sink to the
+  // bottom (stable, so each group keeps its original order) — after Find emails
+  // refreshes the rows, the newly-addressed leads float up with the rest.
   const visible = useMemo(() => {
     if (folderSel.size === 0) return [];
     return targets
@@ -273,7 +298,8 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
             (r.website ?? "").toLowerCase().includes(term) ||
             (r.emails ?? []).some((e) => e.toLowerCase().includes(term))
           : true,
-      );
+      )
+      .sort((a, b) => Number((b.emails?.length ?? 0) > 0) - Number((a.emails?.length ?? 0) > 0));
   }, [targets, folderSel, term]);
 
   // the current selection (drives Compose) + how many need a website scrape
@@ -304,6 +330,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     setFindPhase("running");
     setFindError(null);
     setFindInfo(null);
+    setFindSuccessOpen(false); // clear any prior run's success modal
 
     let res: Response;
     try {
@@ -323,7 +350,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       | {
           ok?: boolean;
           mode?: "live" | "demo" | "noop";
-          results?: Array<{ id: string; emails: string[] }>;
+          results?: Array<{ id: string; emails: string[]; best_email?: string | null }>;
           found?: number;
           error?: string;
         }
@@ -336,50 +363,112 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     }
 
     const results = Array.isArray(data.results) ? data.results : [];
+    // Prefill the scraped addresses onto the folder's lead rows so they become
+    // sendable (and show an address) without a refresh. Order the chosen
+    // best_email first — the audience table and bestEmail() both read that as
+    // the lead's address — while keeping the alternates for review.
+    const byId = new Map(
+      results
+        .filter((r) => Array.isArray(r.emails) && r.emails.length > 0)
+        .map((r) => {
+          const best = r.best_email && r.emails.includes(r.best_email) ? r.best_email : null;
+          const ordered = best ? [best, ...r.emails.filter((e) => e !== best)] : r.emails;
+          return [r.id, ordered] as const;
+        }),
+    );
     setLoad((prev) => {
       if (prev.status !== "ready") return prev;
-      const byId = new Map(results.map((r) => [r.id, r.emails]));
       return {
         ...prev,
         rows: prev.rows.map((row) => {
           const emails = row.id ? byId.get(row.id) : undefined;
-          return Array.isArray(emails) && emails.length > 0 && (row.emails?.length ?? 0) === 0
-            ? { ...row, emails }
-            : row;
+          // only prefill leads that had no stored address — never clobber an
+          // email a lead already came in with (from the CSV import)
+          return emails && (row.emails?.length ?? 0) === 0 ? { ...row, emails } : row;
         }),
       };
     });
-    setFindInfo({ mode: data.mode === "demo" ? "demo" : "live", found: data.found ?? 0, tried: batch.length });
+    const mode = data.mode === "demo" ? "demo" : "live";
+    setFindInfo({ mode, found: data.found ?? 0, tried: batch.length });
     setFindPhase("done");
+    // Pop the success summary for a real run — demo means "not connected", which
+    // the inline hint already explains, so no modal there.
+    if (mode === "live") setFindSuccessOpen(true);
   }, [findable]);
+
+  // Dismiss the Find emails error modal — back to idle so the outcome line and
+  // the modal both clear (the button stays, ready for another run).
+  const dismissFindError = useCallback(() => {
+    setFindPhase("idle");
+    setFindError(null);
+  }, []);
 
   // the actual send list. AI mode: approved, still-selected, sendable drafts,
   // each carrying its own subject/body; template mode: selected leads with a
   // stored best address. Intersecting with `picked` means a lead deselected
   // after composing is never mailed, and nothing is armed mid-compose.
+  //
+  // TOP-UP: one best address per lead first — then, when that resolves to
+  // fewer than MIN_SEND_EMAILS addresses, the list is padded with the
+  // alternate stored addresses of leads that have more than one email (same
+  // per-lead content, flagged `alt`), until the target or the alternates run
+  // out. Deduped case-insensitively across the whole send; the send route
+  // de-dupes by address too, so the counts agree.
   const recipients = useMemo<Recipient[]>(() => {
+    // one best address per lead, paired with the lead's FULL stored list so
+    // the top-up below can draw its alternates
+    let base: Array<{ recipient: Recipient; emails: readonly string[] }>;
     if (draftMode === "ai") {
       if (composePhase !== "ready") return [];
-      return drafts
+      base = drafts
         .filter((d) => approved.has(d.id) && picked.has(d.id) && draftSendable(d))
         .map((d) => ({
-          id: d.id,
-          email: d.best_email!,
-          business: d.business,
-          subject: d.subject,
-          html: d.html,
-          category: d.category,
+          recipient: {
+            id: d.id,
+            email: d.best_email!,
+            business: d.business,
+            subject: d.subject,
+            html: d.html,
+            category: d.category,
+          },
+          emails: d.emails,
         }));
+    } else {
+      base = pickedTargets
+        .map((r) => ({
+          recipient: { id: r.id!, email: bestEmail(r.emails) ?? "", business: r.name, category: r.category ?? null },
+          emails: r.emails ?? [],
+        }))
+        .filter((b) => !!b.recipient.email);
     }
-    return pickedTargets
-      .map((r) => ({ id: r.id!, email: bestEmail(r.emails) ?? "", business: r.name, category: r.category ?? null }))
-      .filter((r) => !!r.email);
+
+    const out = base.map((b) => b.recipient);
+    if (out.length === 0 || out.length >= MIN_SEND_EMAILS) return out;
+
+    const used = new Set(out.map((r) => r.email.toLowerCase()));
+    for (const b of base) {
+      if (out.length >= MIN_SEND_EMAILS) break;
+      for (const email of alternateEmails(b.emails, used)) {
+        if (out.length >= MIN_SEND_EMAILS) break;
+        used.add(email.toLowerCase());
+        out.push({ ...b.recipient, email, alt: true });
+      }
+    }
+    return out;
   }, [draftMode, composePhase, drafts, approved, picked, pickedTargets]);
   const recipientCount = recipients.length;
+  // distinct LEADS being mailed — with the top-up, one lead can hold several
+  // recipient rows, so lead-facing copy must not count rows
+  const recipientLeadCount = useMemo(
+    () => new Set(recipients.map((r) => r.id)).size,
+    [recipients],
+  );
   // template-mode leads dropped for want of a stored email (website-only leads
   // above the AI cap, or when the shared template is used deliberately)
   const templateDropped =
-    !(draftMode === "ai" && composePhase === "ready") ? pickedTargets.length - recipientCount : 0;
+    !(draftMode === "ai" && composePhase === "ready")
+      ? pickedTargets.length - recipientLeadCount
+      : 0;
 
   // Invalidate stale drafts when the composed audience changes — a re-compose
   // is required so the drafts, approvals, and send list stay consistent.
@@ -616,6 +705,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     setFindPhase("idle");
     setFindInfo(null);
     setFindError(null);
+    setFindSuccessOpen(false);
     setDrafts([]);
     setApproved(new Set());
     setDraftIdx(0);
@@ -672,7 +762,6 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           findableCount={findable.length}
           findPhase={findPhase}
           findInfo={findInfo}
-          findError={findError}
           onFindEmails={findEmails}
           folders={folders}
           folderSel={folderSel}
@@ -730,6 +819,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           recipients={recipients}
           canAi={pickedTargets.length > 0 && pickedTargets.length <= MAX_COMPOSE_LEADS}
           hasDrafts={drafts.length > 0}
+          pickedCount={pickedTargets.length}
           droppedCount={templateDropped}
           onAiCompose={drafts.length > 0 ? () => setDraftMode("ai") : startCompose}
           onCampaign={setCampaign}
@@ -759,9 +849,10 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     const aiSend = draftMode === "ai" && composePhase === "ready";
     return (
       <ReviewPanel
-        recipientCount={recipientCount}
+        recipients={recipients}
         campaign={slugifyCampaign(campaign) || DEFAULT_CAMPAIGN}
         subject={subject}
+        bodyHtml={body}
         ai={aiSend}
         templateReady={aiSend || (subject.trim().length > 0 && body.trim().length > 0)}
         droppedCount={templateDropped}
@@ -827,6 +918,28 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       </Reveal>
 
       <Footer />
+
+      {/* Find emails failure — surfaced as a modal with the server error and a
+          troubleshooting checklist (the automation lives in n8n, so most
+          failures are a wiring problem the user resolves there). */}
+      <FindErrorModal
+        open={findPhase === "error"}
+        message={findError}
+        onClose={dismissFindError}
+        onRetry={() => {
+          dismissFindError();
+          findEmails();
+        }}
+      />
+
+      {/* Find emails success — how many of the scanned leads got an address.
+          Prefilled onto the folder's rows already; this just confirms the run. */}
+      <FindSuccessModal
+        open={findSuccessOpen && findInfo?.mode === "live"}
+        found={findInfo?.found ?? 0}
+        tried={findInfo?.tried ?? 0}
+        onClose={() => setFindSuccessOpen(false)}
+      />
     </div>
   );
 }
@@ -884,7 +997,6 @@ function AudiencePanel({
   findableCount,
   findPhase,
   findInfo,
-  findError,
   onFindEmails,
   folders,
   folderSel,
@@ -909,7 +1021,6 @@ function AudiencePanel({
   findableCount: number;
   findPhase: FindPhase;
   findInfo: FindInfo | null;
-  findError: string | null;
   onFindEmails: () => void;
   folders: string[];
   folderSel: Set<string>;
@@ -927,17 +1038,17 @@ function AudiencePanel({
 }) {
   const noFolders = folderSel.size === 0;
   const finding = findPhase === "running";
-  // outcome line for the last Find emails run (shown under the lead table)
+  // outcome line for the last Find emails run (shown under the lead table).
+  // Errors are surfaced in a modal (see FindErrorModal) rather than inline, so
+  // this line only carries the success / demo outcome.
   const findNote =
-    findPhase === "error" && findError
-      ? findError
-      : findPhase === "done" && findInfo
-        ? findInfo.mode === "demo"
-          ? "The Email Finder automation isn't connected — add its webhook on the Integrations tab, then try again."
-          : `Found addresses for ${findInfo.found.toLocaleString("en-US")} of ${findInfo.tried.toLocaleString("en-US")} website-only lead${findInfo.tried === 1 ? "" : "s"}.${
-              findInfo.found < findInfo.tried ? " The rest had nothing scrapable — add those by hand in review." : ""
-            }`
-        : null;
+    findPhase === "done" && findInfo
+      ? findInfo.mode === "demo"
+        ? "The Email Finder automation isn't connected — add its webhook on the Integrations tab, then try again."
+        : `Found addresses for ${findInfo.found.toLocaleString("en-US")} of ${findInfo.tried.toLocaleString("en-US")} website-only lead${findInfo.tried === 1 ? "" : "s"}.${
+            findInfo.found < findInfo.tried ? " The rest had nothing scrapable — add those by hand in review." : ""
+          }`
+      : null;
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -950,16 +1061,47 @@ function AudiencePanel({
               : "stored leads with an email or website"
           }
         />
-        <button
-          type="button"
-          onClick={onRefresh}
-          data-track="campaign_refresh_leads"
-          aria-label="Refresh leads"
-          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-        >
-          <RefreshCw className={cn("h-3.5 w-3.5", load.status === "loading" && "animate-spin")} aria-hidden />
-          Refresh
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          {findableCount > 0 && (
+            <Button
+              variant="outline"
+              size="sm"
+              data-track="campaign_find_emails"
+              disabled={finding}
+              onClick={onFindEmails}
+              className="gap-1.5"
+            >
+              {finding ? (
+                <RefreshCw className="h-4 w-4 animate-spin" aria-hidden />
+              ) : (
+                <Globe className="h-4 w-4" aria-hidden />
+              )}
+              {finding
+                ? "Finding emails…"
+                : `Find emails (${Math.min(findableCount, MAX_FIND_LEADS).toLocaleString("en-US")})`}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            data-track="campaign_next_compose_top"
+            disabled={selectedCount === 0 || selectedCount > MAX_RECIPIENTS}
+            onClick={onContinue}
+            className="gap-1.5"
+          >
+            Compose email
+            <PenLine className="h-4 w-4" aria-hidden />
+          </Button>
+          <button
+            type="button"
+            onClick={onRefresh}
+            data-track="campaign_refresh_leads"
+            aria-label="Refresh leads"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", load.status === "loading" && "animate-spin")} aria-hidden />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {load.status === "loading" && <TableSkeleton />}
@@ -1053,62 +1195,25 @@ function AudiencePanel({
           )}
 
           {findNote && (
-            <p
-              role="status"
-              className={cn(
-                "font-mono text-[10.5px] leading-relaxed",
-                findPhase === "error" ? "text-destructive" : "text-muted-foreground",
-              )}
-            >
+            <p role="status" className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
               {findNote}
             </p>
           )}
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p
-              className={cn(
-                "font-mono text-[10.5px] leading-relaxed",
-                selectedCount > MAX_RECIPIENTS ? "text-destructive" : "text-muted-foreground",
-              )}
-            >
-              {selectedCount > MAX_RECIPIENTS
-                ? `Max ${MAX_RECIPIENTS.toLocaleString("en-US")} recipients per send — deselect ${(selectedCount - MAX_RECIPIENTS).toLocaleString("en-US")}.`
-                : selectedCount > MAX_COMPOSE_LEADS
-                  ? `AI drafting handles up to ${MAX_COMPOSE_LEADS} leads per run — larger selections use the shared template${scrapeCount > 0 ? `, which skips the ${scrapeCount.toLocaleString("en-US")} without a stored email` : ""}.`
-                  : scrapeCount > 0
-                    ? `${scrapeCount.toLocaleString("en-US")} selected lead${scrapeCount === 1 ? " has" : "s have"} no stored email — Find emails scans their websites, or add an address while reviewing.`
-                    : "Compose drafts each lead with Claude, grounded in its sector knowledge base."}
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              {findableCount > 0 && (
-                <Button
-                  variant="outline"
-                  data-track="campaign_find_emails"
-                  disabled={finding}
-                  onClick={onFindEmails}
-                  className="gap-1.5"
-                >
-                  {finding ? (
-                    <RefreshCw className="h-4 w-4 animate-spin" aria-hidden />
-                  ) : (
-                    <Globe className="h-4 w-4" aria-hidden />
-                  )}
-                  {finding
-                    ? "Finding emails…"
-                    : `Find emails (${Math.min(findableCount, MAX_FIND_LEADS).toLocaleString("en-US")})`}
-                </Button>
-              )}
-              <Button
-                data-track="campaign_next_compose"
-                disabled={selectedCount === 0 || selectedCount > MAX_RECIPIENTS}
-                onClick={onContinue}
-                className="gap-1.5"
-              >
-                Compose email
-                <PenLine className="h-4 w-4" aria-hidden />
-              </Button>
-            </div>
-          </div>
+          <p
+            className={cn(
+              "font-mono text-[10.5px] leading-relaxed",
+              selectedCount > MAX_RECIPIENTS ? "text-destructive" : "text-muted-foreground",
+            )}
+          >
+            {selectedCount > MAX_RECIPIENTS
+              ? `Max ${MAX_RECIPIENTS.toLocaleString("en-US")} recipients per send — deselect ${(selectedCount - MAX_RECIPIENTS).toLocaleString("en-US")}.`
+              : selectedCount > MAX_COMPOSE_LEADS
+                ? `AI drafting handles up to ${MAX_COMPOSE_LEADS} leads per run — larger selections use the shared template${scrapeCount > 0 ? `, which skips the ${scrapeCount.toLocaleString("en-US")} without a stored email` : ""}.`
+                : scrapeCount > 0
+                  ? `${scrapeCount.toLocaleString("en-US")} selected lead${scrapeCount === 1 ? " has" : "s have"} no stored email — Find emails scans their websites, or add an address while reviewing.`
+                  : "Compose drafts each lead with Claude, grounded in its sector knowledge base."}
+          </p>
         </>
       )}
     </div>
@@ -1208,6 +1313,7 @@ function ComposePanel({
   recipients,
   canAi,
   hasDrafts,
+  pickedCount,
   droppedCount,
   onAiCompose,
   onCampaign,
@@ -1222,6 +1328,7 @@ function ComposePanel({
   recipients: Array<{ id: string; email: string; business: string }>;
   canAi: boolean;
   hasDrafts: boolean;
+  pickedCount: number;
   droppedCount: number;
   onAiCompose: () => void;
   onCampaign: (v: string) => void;
@@ -1233,11 +1340,13 @@ function ComposePanel({
   const tag = slugifyCampaign(campaign) || DEFAULT_CAMPAIGN;
   const sample = recipients[0] ?? { id: "preview-lead", email: "info@acme-hvac.com", business: "Acme HVAC & Plumbing" };
   const link = trackedLink(trackBase(), sample.id, tag);
+  // distinct leads (the top-up can give one lead several recipient rows)
+  const leadCount = useMemo(() => new Set(recipients.map((r) => r.id)).size, [recipients]);
 
-  const previewDoc = useMemo(() => {
-    const inner = renderBody(body, { business: sample.business, link });
-    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><base target="_blank"><style>body{margin:0;padding:18px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.55;color:#1a1a1a;background:#fff}p{margin:0 0 14px}a{color:#c8102e;font-weight:600;text-decoration:underline}</style></head><body>${inner}</body></html>`;
-  }, [body, sample.business, link]);
+  const previewDoc = useMemo(
+    () => emailPreviewDoc(renderBody(body, { business: sample.business, link })),
+    [body, sample.business, link],
+  );
 
   const canContinue = subject.trim().length > 0 && body.trim().length > 0 && recipients.length > 0;
 
@@ -1257,6 +1366,25 @@ function ComposePanel({
           </button>
         )}
       </div>
+
+      {pickedCount > MAX_COMPOSE_LEADS && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/[0.06] px-3 py-2.5">
+          <p className="text-[12px] leading-relaxed text-foreground">
+            <span className="font-semibold">
+              {pickedCount.toLocaleString("en-US")} leads selected — over the {MAX_COMPOSE_LEADS}-lead AI drafting cap.
+            </span>{" "}
+            Every recipient will get this one shared template, not a Claude-written email. Go back and trim the
+            selection to {MAX_COMPOSE_LEADS} or fewer to have the AI composer draft each email individually.
+          </p>
+        </div>
+      )}
+      {canAi && !hasDrafts && (
+        <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+          This is the shared fallback template — every recipient gets the same email. Use{" "}
+          <span className="text-foreground/80">Draft with AI instead</span> to have Claude write each lead a
+          sector-specific email from the composer prompt.
+        </p>
+      )}
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* editor */}
@@ -1328,8 +1456,8 @@ function ComposePanel({
       {droppedCount > 0 && (
         <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
           This shared template only reaches the{" "}
-          <span className="text-foreground/80">{recipients.length.toLocaleString("en-US")}</span> selected lead
-          {recipients.length === 1 ? "" : "s"} with a stored email —{" "}
+          <span className="text-foreground/80">{leadCount.toLocaleString("en-US")}</span> selected lead
+          {leadCount === 1 ? "" : "s"} with a stored email —{" "}
           <span className="text-foreground/80">{droppedCount.toLocaleString("en-US")}</span> website-only lead
           {droppedCount === 1 ? "" : "s"} {droppedCount === 1 ? "is" : "are"} skipped. Draft with AI ({MAX_COMPOSE_LEADS} or
           fewer) to write them and add an address in review.
@@ -1474,11 +1602,10 @@ function DraftsReviewPanel({
   const allOn = sendable.length > 0 && sendable.every((d) => approved.has(d.id));
 
   const link = current ? trackedLink(trackBase(), current.id, campaignTag) : "";
-  const previewDoc = useMemo(() => {
-    if (!current) return "";
-    const inner = renderBody(current.html, { business: current.business, link });
-    return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><base target="_blank"><style>body{margin:0;padding:18px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.55;color:#1a1a1a;background:#fff}p{margin:0 0 14px}a{color:#c8102e;font-weight:600;text-decoration:underline}</style></head><body>${inner}</body></html>`;
-  }, [current, link]);
+  const previewDoc = useMemo(
+    () => (current ? emailPreviewDoc(renderBody(current.html, { business: current.business, link })) : ""),
+    [current, link],
+  );
 
   return (
     <div className="flex flex-col gap-4">
@@ -1692,9 +1819,10 @@ function DraftsReviewPanel({
 /* ─────────────────────────────  review & send  ───────────────────────────── */
 
 function ReviewPanel({
-  recipientCount,
+  recipients,
   campaign,
   subject,
+  bodyHtml,
   ai,
   templateReady,
   droppedCount,
@@ -1702,9 +1830,10 @@ function ReviewPanel({
   onSend,
   sending,
 }: {
-  recipientCount: number;
+  recipients: Recipient[];
   campaign: string;
   subject: string;
+  bodyHtml: string;
   ai: boolean;
   templateReady: boolean;
   droppedCount: number;
@@ -1712,6 +1841,11 @@ function ReviewPanel({
   onSend: () => void;
   sending: boolean;
 }) {
+  const recipientCount = recipients.length;
+  // top-up rows: alternate addresses added because the send resolved fewer
+  // than MIN_SEND_EMAILS addresses (see the recipients memo)
+  const altCount = recipients.filter((r) => r.alt).length;
+  const leadCount = new Set(recipients.map((r) => r.id)).size;
   const none = recipientCount === 0;
   const overCap = recipientCount > MAX_RECIPIENTS;
   const blocked = none || overCap || !templateReady;
@@ -1725,12 +1859,44 @@ function ReviewPanel({
         <Stat label="Message" value={ai ? "AI · per lead" : "Shared template"} />
       </dl>
 
-      <div className="rounded-lg border border-border bg-background/40 px-3 py-2.5">
-        <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Subject</div>
-        <div className="mt-0.5 truncate text-[13px] text-foreground">
-          {ai ? "Per-lead AI subject & body — reviewed in Compose" : subject || "(no subject)"}
+      {!ai && (
+        <div className="rounded-lg border border-border bg-background/40 px-3 py-2.5">
+          <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Subject</div>
+          <div className="mt-0.5 truncate text-[13px] text-foreground">{subject || "(no subject)"}</div>
         </div>
-      </div>
+      )}
+
+      {/* every email exactly as it will be sent — AI drafts each carry their own
+          subject/body; template sends render the shared template per lead.
+          Expand a row to see the full rendered email. */}
+      {recipientCount > 0 && (
+        <div className="flex flex-col gap-2">
+          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+            {ai ? "The emails Claude drafted" : "Emails to send"} · {recipientCount.toLocaleString("en-US")} · click one to preview
+          </span>
+          <ul className="max-h-[420px] divide-y divide-border overflow-y-auto rounded-lg border border-border">
+            {recipients.map((r) => (
+              <ReviewEmailRow
+                // the top-up can list one lead at several addresses — the
+                // address, not the lead, is what's unique per row
+                key={`${r.id}:${r.email.toLowerCase()}`}
+                recipient={r}
+                campaign={campaign}
+                fallbackSubject={subject}
+                fallbackHtml={bodyHtml}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {altCount > 0 && (
+        <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+          Fewer than {MIN_SEND_EMAILS} addresses resolved — {altCount.toLocaleString("en-US")} alternate address
+          {altCount === 1 ? "" : "es"} from leads with more than one stored email {altCount === 1 ? "was" : "were"} added
+          (marked <span className="text-foreground/80">2nd address</span> above), so every inbox we know about is reached.
+        </p>
+      )}
 
       {!ai && droppedCount > 0 && (
         <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
@@ -1754,7 +1920,8 @@ function ReviewPanel({
           </span>
           <div className="min-w-0 flex-1">
             <div className="text-[13px] font-semibold text-foreground">
-              Send to {recipientCount.toLocaleString("en-US")} lead{recipientCount === 1 ? "" : "s"}?
+              Send {recipientCount.toLocaleString("en-US")} email{recipientCount === 1 ? "" : "s"} to{" "}
+              {leadCount.toLocaleString("en-US")} lead{leadCount === 1 ? "" : "s"}?
             </div>
             <div className="truncate font-mono text-[10.5px] text-muted-foreground">
               Triggers the outreach automation · each email carries a tracked link
@@ -1787,6 +1954,83 @@ function ReviewPanel({
         </Can>
       </div>
     </div>
+  );
+}
+
+/** One send-list row in Review & send — collapsed it shows who/where/subject;
+ *  expanded it renders the exact email (merge tokens + tracked link resolved).
+ *  Only open rows mount an iframe, so a big send list stays light. */
+function ReviewEmailRow({
+  recipient,
+  campaign,
+  fallbackSubject,
+  fallbackHtml,
+}: {
+  recipient: Recipient;
+  campaign: string;
+  fallbackSubject: string;
+  fallbackHtml: string;
+}) {
+  const [open, setOpen] = useState(false);
+  // AI drafts carry their own subject/html; template recipients fall back to the shared one
+  const subject = recipient.subject ?? fallbackSubject;
+  const html = recipient.html ?? fallbackHtml;
+  const link = trackedLink(trackBase(), recipient.id, campaign);
+  const renderedSubject = renderSubject(subject, { business: recipient.business });
+  const previewDoc = useMemo(
+    () => (open ? emailPreviewDoc(renderBody(html, { business: recipient.business, link })) : ""),
+    [open, html, recipient.business, link],
+  );
+
+  return (
+    <li className="bg-card">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        data-track="campaign_review_email_toggle"
+        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition-colors hover:bg-primary/[0.04]"
+      >
+        <ChevronRight
+          className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")}
+          aria-hidden
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-[12.5px] font-medium text-foreground">{recipient.business}</span>
+            {recipient.alt && (
+              <span className="inline-flex shrink-0 items-center rounded-full border border-border bg-muted px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground">
+                2nd address
+              </span>
+            )}
+          </div>
+          <div className="truncate font-mono text-[10px] text-muted-foreground">
+            to {recipient.email} · {renderedSubject || "(no subject)"}
+          </div>
+        </div>
+        <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+      </button>
+      {open && (
+        <div className="border-t border-border bg-background/40 px-3 pb-3 pt-2.5">
+          <div className="overflow-hidden rounded-lg border border-border">
+            <div className="border-b border-border bg-card px-3 py-2">
+              <div className="truncate text-[12.5px] font-semibold text-foreground">
+                {renderedSubject || "(no subject)"}
+              </div>
+              <div className="mt-px truncate font-mono text-[10px] text-muted-foreground">
+                to {recipient.email} · exactly as it will be sent
+              </div>
+            </div>
+            <iframe
+              title={`Email preview for ${recipient.business}`}
+              srcDoc={previewDoc}
+              sandbox=""
+              className="h-[240px] w-full bg-white"
+            />
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
 
@@ -1883,6 +2127,269 @@ function ErrorPanel({
         </Button>
       </div>
     </div>
+  );
+}
+
+/* ─────────────────────────────  find emails success modal  ───────────────────────────── */
+
+/** Success summary after a live Find emails run — how many of the scanned leads
+ *  came back with an address. The addresses are already prefilled onto the
+ *  folder's rows; this confirms the outcome. Same modal pattern as the error
+ *  dialog (overlay + focus trap + Escape). */
+function FindSuccessModal({
+  open,
+  found,
+  tried,
+  onClose,
+}: {
+  open: boolean;
+  found: number;
+  tried: number;
+  onClose: () => void;
+}) {
+  const reduce = useReducedMotion();
+  const ref = useRef<HTMLDivElement>(null);
+  useFocusTrap(open, ref);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  const none = found === 0;
+  const missed = Math.max(0, tried - found);
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            className="fixed inset-0 z-[80] bg-black/55 backdrop-blur-[1px]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduce ? 0 : 0.18 }}
+            onClick={onClose}
+            aria-hidden
+          />
+          <div className="fixed inset-0 z-[81] flex items-center justify-center p-4">
+            <motion.div
+              ref={ref}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Find emails complete"
+              tabIndex={-1}
+              className="w-[min(94vw,460px)] overflow-hidden rounded-2xl border border-border bg-card shadow-2xl outline-none"
+              initial={reduce ? false : { opacity: 0, scale: 0.96, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.97, y: 6 }}
+              transition={{ duration: reduce ? 0 : 0.32, ease: PANEL_EASE }}
+            >
+              {/* header */}
+              <div className="flex items-start gap-3 border-b border-border px-5 py-4">
+                <div
+                  className={cn(
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+                    none ? "bg-muted text-muted-foreground" : "bg-primary-solid text-primary-foreground",
+                  )}
+                >
+                  {none ? <Globe className="h-5 w-5" aria-hidden /> : <Check className="h-5 w-5" aria-hidden />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h2 className="font-heading text-base font-semibold text-foreground">
+                    {none ? "No addresses found" : "Emails found"}
+                  </h2>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Scanned {tried.toLocaleString("en-US")} website-only lead{tried === 1 ? "" : "s"}.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label="Close"
+                  className="-mr-1 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* body */}
+              <div className="space-y-3 px-5 py-4">
+                <div className="flex items-center gap-3 rounded-lg border border-border bg-background/40 px-3 py-3">
+                  <span className="tnum font-mono text-[30px] font-semibold leading-none text-foreground">
+                    {found.toLocaleString("en-US")}
+                    <span className="text-muted-foreground">/{tried.toLocaleString("en-US")}</span>
+                  </span>
+                  <span className="text-[12px] leading-snug text-muted-foreground">
+                    lead{found === 1 ? "" : "s"} got a contact address, prefilled onto the rows in this folder.
+                  </span>
+                </div>
+                <p className="text-[12px] leading-relaxed text-muted-foreground">
+                  {none
+                    ? "None of the scanned sites exposed a usable address — add one by hand while reviewing, or try a different selection."
+                    : missed > 0
+                      ? `The other ${missed.toLocaleString("en-US")} had nothing scrapable — add those by hand in review.`
+                      : "Every scanned lead now has an address and is ready to compose."}
+                </p>
+              </div>
+
+              {/* footer */}
+              <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/40 px-5 py-3">
+                <Button
+                  size="sm"
+                  onClick={onClose}
+                  data-track="campaign_find_success_close"
+                  className="gap-1.5 bg-primary-solid text-primary-foreground hover:bg-primary-solid/90"
+                >
+                  <Check className="h-4 w-4" aria-hidden />
+                  Done
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        </>
+      )}
+    </AnimatePresence>
+  );
+}
+
+/* ─────────────────────────────  find emails error modal  ───────────────────────────── */
+
+/** Troubleshooting steps shown in the Find emails error modal. The finder runs
+ *  in n8n, so most failures aren't app bugs — they're a workflow that's off,
+ *  duplicated, or pointed at the wrong URL. Keep this in step with the setup
+ *  notes in references/APMG Email Finder.json. */
+const FIND_TROUBLESHOOTING = [
+  "Open n8n and confirm the APMG Email Finder workflow is Active (toggle green, top-right).",
+  "Make sure only ONE workflow owns the /webhook/email-finder path — a duplicate import can answer instead and return nothing. Delete the extras.",
+  "Check the Integrations tab holds that workflow's Production URL (ending /webhook/email-finder), not a test URL.",
+  "Open the workflow's Executions in n8n — the run should reach the final Respond node. If it stops earlier, that node shows why.",
+] as const;
+
+/** Modal shown when a Find emails run fails. Carries the server's error message
+ *  plus an actionable checklist. Follows the app modal pattern (overlay +
+ *  centered dialog, focus trap, Escape to close) — see CloseDealModal. */
+function FindErrorModal({
+  open,
+  message,
+  onClose,
+  onRetry,
+}: {
+  open: boolean;
+  message: string | null;
+  onClose: () => void;
+  onRetry: () => void;
+}) {
+  const reduce = useReducedMotion();
+  const ref = useRef<HTMLDivElement>(null);
+  useFocusTrap(open, ref);
+
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  return (
+    <AnimatePresence>
+      {open && (
+        <>
+          <motion.div
+            className="fixed inset-0 z-[80] bg-black/55 backdrop-blur-[1px]"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: reduce ? 0 : 0.18 }}
+            onClick={onClose}
+            aria-hidden
+          />
+          <div className="fixed inset-0 z-[81] flex items-center justify-center p-4">
+            <motion.div
+              ref={ref}
+              role="dialog"
+              aria-modal="true"
+              aria-label="Find emails failed"
+              tabIndex={-1}
+              className="w-[min(94vw,520px)] overflow-hidden rounded-2xl border border-border bg-card shadow-2xl outline-none"
+              initial={reduce ? false : { opacity: 0, scale: 0.96, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.97, y: 6 }}
+              transition={{ duration: reduce ? 0 : 0.32, ease: PANEL_EASE }}
+            >
+              {/* header */}
+              <div className="flex items-start gap-3 border-b border-border px-5 py-4">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-destructive/10 text-destructive">
+                  <AlertTriangle className="h-5 w-5" aria-hidden />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h2 className="font-heading text-base font-semibold text-foreground">Find emails failed</h2>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    The email finder ran but didn&rsquo;t return any addresses. This is almost always a workflow
+                    setup issue in n8n, not the leads.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  aria-label="Close"
+                  className="-mr-1 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* body */}
+              <div className="space-y-4 px-5 py-4">
+                {message && (
+                  <div className="rounded-lg border border-destructive/30 bg-destructive/[0.06] px-3 py-2.5">
+                    <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-destructive">
+                      What the finder returned
+                    </div>
+                    <p role="alert" className="mt-1 font-mono text-[11px] leading-relaxed text-foreground/90">
+                      {message}
+                    </p>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
+                    Try this, in order
+                  </div>
+                  <ol className="space-y-2">
+                    {FIND_TROUBLESHOOTING.map((step, i) => (
+                      <li key={i} className="flex gap-2.5">
+                        <span className="tnum mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 font-mono text-[9px] font-semibold text-primary">
+                          {i + 1}
+                        </span>
+                        <span className="text-[12px] leading-relaxed text-foreground/90">{step}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              </div>
+
+              {/* footer */}
+              <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/40 px-5 py-3">
+                <Button variant="outline" size="sm" onClick={onClose} data-track="campaign_find_error_close">
+                  Close
+                </Button>
+                <Button size="sm" onClick={onRetry} data-track="campaign_find_error_retry" className="gap-1.5">
+                  <RotateCcw className="h-4 w-4" aria-hidden />
+                  Try again
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        </>
+      )}
+    </AnimatePresence>
   );
 }
 

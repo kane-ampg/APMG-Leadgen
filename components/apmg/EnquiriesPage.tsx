@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   Check,
@@ -9,6 +9,7 @@ import {
   LayoutGrid,
   MousePointerClick,
   RefreshCw,
+  Trash2,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -55,7 +56,9 @@ import { Reveal } from "./Reveal";
  * WHAT services they actually want — the whole point of the portal experiment.
  *
  * Status changes (new → contacted → closed) PATCH /api/portal/inquiries
- * optimistically and are gated on `enquiries.manage` (sales + admin).
+ * optimistically and are gated on `enquiries.manage` (sales + admin), as is
+ * the per-row delete (DELETE /api/portal/inquiries?id= — for clearing operator
+ * test submissions and spam, behind an inline destructive confirm).
  * `mode:"demo"` (no Supabase) swaps in the believable Melbourne dataset from
  * lib/data/enquiries.ts behind an amber banner — the tab never crashes.
  */
@@ -463,6 +466,80 @@ function StatusControl({
   );
 }
 
+/** Quiet per-row trash that only turns destructive on hover (TelemetryPage
+ *  grammar). The real delete sits behind the DeleteConfirm strip below —
+ *  a stray click here can never destroy a row. */
+function DeleteButton({
+  inquiry,
+  onClick,
+  disabled,
+}: {
+  inquiry: PortalInquiry;
+  onClick: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      data-track="enquiries_delete"
+      data-track-service={inquiry.serviceSlug}
+      aria-label={`Delete enquiry from ${inquiry.name ?? inquiry.email}`}
+      className="shrink-0 rounded-md p-1.5 text-muted-foreground/70 outline-none transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:bg-destructive/10 focus-visible:text-destructive focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] disabled:pointer-events-none disabled:opacity-50"
+    >
+      <Trash2 className="h-3.5 w-3.5" aria-hidden />
+    </button>
+  );
+}
+
+/** Inline destructive confirm (StoredLeads grammar) — Delete here is the real,
+ *  irreversible action; a failed DELETE surfaces its error right in the strip. */
+function DeleteConfirm({
+  inquiry,
+  busy,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  inquiry: PortalInquiry;
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 border-t border-destructive/40 bg-destructive/[0.04] px-4 py-2">
+      <Trash2 className="h-3.5 w-3.5 shrink-0 text-destructive" aria-hidden />
+      <span className="text-[12px] text-foreground">
+        Permanently delete the enquiry from {inquiry.name ?? inquiry.email}?
+      </span>
+      {error && (
+        <span role="alert" className="font-mono text-[10.5px] text-destructive">
+          {error}
+        </span>
+      )}
+      <div className="ml-auto flex items-center gap-2">
+        <Button variant="outline" size="sm" onClick={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={onConfirm}
+          disabled={busy}
+          data-track="enquiries_delete_confirm"
+          data-track-service={inquiry.serviceSlug}
+          className="gap-1.5"
+        >
+          <Trash2 className="h-3.5 w-3.5" aria-hidden />
+          {busy ? "Deleting…" : "Delete"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ServicePill({ slug }: { slug: string }) {
   return (
     <span className="inline-flex items-center rounded-full border border-border bg-muted px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
@@ -728,6 +805,61 @@ export function EnquiriesPage() {
     }
   }
 
+  /** Two-step delete: the trash arms a row ("confirm"), the strip's Delete
+   *  fires the DELETE ("busy"). One row at a time — arming another disarms
+   *  the first. Rows only leave local state AFTER the server confirms (no
+   *  optimistic remove: a PII delete that silently failed would look done). */
+  const [deleting, setDeleting] = useState<{ id: string; phase: "confirm" | "busy" } | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  function requestDelete(id: string) {
+    setDeleteError(null);
+    // Clicking the trash of the already-armed row toggles it back off.
+    setDeleting((prev) => (prev?.id === id && prev.phase === "confirm" ? null : { id, phase: "confirm" }));
+  }
+
+  function cancelDelete() {
+    setDeleting(null);
+    setDeleteError(null);
+  }
+
+  async function confirmDelete(inquiry: PortalInquiry) {
+    if (load.status !== "ready") return;
+    setDeleting({ id: inquiry.id, phase: "busy" });
+    setDeleteError(null);
+    const drop = () => {
+      setLoad((prev) =>
+        prev.status === "ready"
+          ? { ...prev, inquiries: prev.inquiries.filter((q) => q.id !== inquiry.id) }
+          : prev,
+      );
+      setDeleting(null);
+    };
+    // Demo rows are a client-side constant (ids aren't uuids) — drop locally.
+    if (load.mode === "demo") {
+      drop();
+      return;
+    }
+    try {
+      const res = await fetch(`/api/portal/inquiries?id=${encodeURIComponent(inquiry.id)}`, {
+        method: "DELETE",
+        headers: adminHeaders(),
+      });
+      const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
+      if (!mountedRef.current) return;
+      if (!res.ok || !data?.ok) {
+        setDeleting({ id: inquiry.id, phase: "confirm" });
+        setDeleteError(data?.error ?? `Couldn't delete the enquiry (${res.status}).`);
+        return;
+      }
+      drop();
+    } catch {
+      if (!mountedRef.current) return;
+      setDeleting({ id: inquiry.id, phase: "confirm" });
+      setDeleteError("Network error deleting the enquiry.");
+    }
+  }
+
   function toggleExpanded(id: string) {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -974,11 +1106,17 @@ export function EnquiriesPage() {
                           <TableHead>Sector / attribution</TableHead>
                           <TableHead>Message</TableHead>
                           <TableHead className="text-right">Status</TableHead>
+                          {canManage && (
+                            <TableHead className="w-9">
+                              <span className="sr-only">Delete</span>
+                            </TableHead>
+                          )}
                         </TableRow>
                       </TableHeader>
                       <TableBody>
                         {inquiries.map((q) => (
-                          <TableRow key={q.id} className="align-top hover:bg-muted/40">
+                          <Fragment key={q.id}>
+                          <TableRow className="align-top hover:bg-muted/40">
                             <TableCell
                               className="tnum py-3 align-top font-mono text-[11px] text-muted-foreground"
                               title={fmtFull(q.createdAt)}
@@ -1013,7 +1151,30 @@ export function EnquiriesPage() {
                                 onChange={(next) => changeStatus(q, next)}
                               />
                             </TableCell>
+                            {canManage && (
+                              <TableCell className="py-3 text-right align-top">
+                                <DeleteButton
+                                  inquiry={q}
+                                  onClick={() => requestDelete(q.id)}
+                                  disabled={deleting?.phase === "busy"}
+                                />
+                              </TableCell>
+                            )}
                           </TableRow>
+                          {deleting?.id === q.id && (
+                            <TableRow className="hover:bg-transparent">
+                              <TableCell colSpan={7} className="p-0">
+                                <DeleteConfirm
+                                  inquiry={q}
+                                  busy={deleting.phase === "busy"}
+                                  error={deleteError}
+                                  onCancel={cancelDelete}
+                                  onConfirm={() => confirmDelete(q)}
+                                />
+                              </TableCell>
+                            </TableRow>
+                          )}
+                          </Fragment>
                         ))}
                       </TableBody>
                     </Table>
@@ -1032,12 +1193,19 @@ export function EnquiriesPage() {
                               <EmailLink inquiry={q} />
                             </div>
                           </div>
-                          <div className="shrink-0">
+                          <div className="flex shrink-0 items-center gap-1">
                             <StatusControl
                               inquiry={q}
                               canManage={canManage}
                               onChange={(next) => changeStatus(q, next)}
                             />
+                            {canManage && (
+                              <DeleteButton
+                                inquiry={q}
+                                onClick={() => requestDelete(q.id)}
+                                disabled={deleting?.phase === "busy"}
+                              />
+                            )}
                           </div>
                         </div>
 
@@ -1062,6 +1230,18 @@ export function EnquiriesPage() {
                             onToggle={() => toggleExpanded(q.id)}
                           />
                         </div>
+
+                        {deleting?.id === q.id && (
+                          <div className="-mx-3 -mb-3 mt-2">
+                            <DeleteConfirm
+                              inquiry={q}
+                              busy={deleting.phase === "busy"}
+                              error={deleteError}
+                              onCancel={cancelDelete}
+                              onConfirm={() => confirmDelete(q)}
+                            />
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>

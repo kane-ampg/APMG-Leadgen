@@ -11,6 +11,7 @@ import {
 import { isUuid, sameOrigin } from "@/lib/pipeline/server";
 import { buildComposeKb, loadPlaybooks } from "@/lib/pipeline/sectorStore";
 import { draftEmail } from "@/lib/ai/composeEmail";
+import { COMPOSE_ANGLES } from "@/lib/ai/composePrompt";
 import { loadComposePrompt, type ComposePromptConfig } from "@/lib/ai/composeStore";
 
 // "Compose email": drafts a per-lead cold email in-app with the Claude API
@@ -29,8 +30,8 @@ import { loadComposePrompt, type ComposePromptConfig } from "@/lib/ai/composeSto
 // SECURITY — TODO before exposing publicly: same-origin (CSRF) floor only, NOT
 // real auth; enforce the `campaigns.send` permission here too once auth lands.
 export const runtime = "nodejs";
-// Leads are drafted sequentially (one Claude call each) so a large batch can be
-// slow; give serverless deploys the platform max.
+// Leads are drafted through a small concurrency pool (one Claude call each) so
+// a full-cap batch still takes minutes; give serverless deploys the platform max.
 export const maxDuration = 300;
 
 const MAX_SUBJECT = 300;
@@ -78,12 +79,14 @@ async function draftForLead(
   lead: ComposeLeadInput,
   kb: string,
   promptCfg: ComposePromptConfig,
+  angle: string,
 ): Promise<{ draft: ComposeDraft; ai: boolean }> {
   const base = demoDraft(lead);
   const drafted = await draftEmail(
     { business: lead.name, category: lead.category, website: lead.website },
     kb,
     promptCfg,
+    angle,
   );
   if (!drafted) return { draft: base, ai: false };
   const subject = drafted.subject.slice(0, MAX_SUBJECT);
@@ -134,33 +137,49 @@ export async function POST(req: Request): Promise<Response> {
 
   // Ground each draft in the sector KB for its Category (general company file +
   // the matched sector markdown; uploaded KB in Supabase wins over the repo
-  // file). Draft sequentially so a batch of same-sector leads reuses the cached
-  // KB system prefix instead of paying a cold cache write per lead.
-  // The editable prompt config (model + instructions + message template +
+  // file). The editable prompt config (model + instructions + message template +
   // output schema) — loaded once per batch, from the compose_prompt singleton
   // if saved, else the in-code defaults.
   const promptCfg = await loadComposePrompt();
   const playbooks = await loadPlaybooks();
   // Memoize the KB per Category so the general company file isn't re-read from
   // disk once per lead, and same-Category leads get a byte-identical (and thus
-  // cacheable) system prefix.
-  const kbByCategory = new Map<string, string>();
-  const kbFor = async (category: string | null | undefined): Promise<string> => {
+  // cacheable) system prefix. Memoized as promises so concurrent workers on the
+  // same category share one build instead of racing.
+  const kbByCategory = new Map<string, Promise<string>>();
+  const kbFor = (category: string | null | undefined): Promise<string> => {
     const key = (category ?? "").toLowerCase().trim();
     const hit = kbByCategory.get(key);
     if (hit !== undefined) return hit;
-    const kb = await buildComposeKb(category, playbooks);
+    const kb = buildComposeKb(category, playbooks);
     kbByCategory.set(key, kb);
     return kb;
   };
 
-  const results: ComposeDraft[] = [];
+  // Draft through a small worker pool. Two workers, not more: the org's API
+  // tier rate-limits requests/minute, so wider pools just burn every call on
+  // 429s (observed live: 5 workers → half the batch falling back to the
+  // template). Two keeps a call in flight while the other backs off, and
+  // same-sector leads still hit the cached KB system prefix after the first
+  // round. Results keep the input order.
+  const CONCURRENCY = 2;
+  const results: ComposeDraft[] = new Array<ComposeDraft>(leads.length);
   let drafted = 0;
-  for (const lead of leads) {
-    const { draft, ai } = await draftForLead(lead, await kbFor(lead.category), promptCfg);
-    results.push(draft);
-    if (ai) drafted += 1;
-  }
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = cursor++;
+      if (i >= leads.length) return;
+      const lead = leads[i];
+      // Rotate the writing angle per lead so same-sector emails in one batch
+      // don't converge on a single shape (each draft is an independent call).
+      const angle = COMPOSE_ANGLES[i % COMPOSE_ANGLES.length];
+      const { draft, ai } = await draftForLead(lead, await kbFor(lead.category), promptCfg, angle);
+      results[i] = draft;
+      if (ai) drafted += 1;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, leads.length) }, worker));
 
   // Key set but every draft fell back to the template (bad key, outage, all
   // refusals) → report demo, so the UI flags "demo drafts" instead of passing

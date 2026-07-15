@@ -9,8 +9,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/cn";
 import { NAV, type TabId } from "@/lib/nav";
 import { useLeadStats } from "@/lib/data/useLeadStats";
+import { useLeadActivityUnseenTotal } from "@/lib/data/leadActivityNotifications";
 import { formatInt } from "@/lib/format";
-import { useTelemetryCount } from "@/lib/telemetry";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { useRbac } from "@/lib/rbac/RbacProvider";
 import { RoleSwitcher } from "@/components/rbac/RoleSwitcher";
@@ -32,7 +32,11 @@ interface SidebarProps {
  * ScrollArea), theme toggle (bottom of ScrollArea), user card / sign-out.
  */
 export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert }: SidebarProps) {
-  const pings = useTelemetryCount();
+  // Telemetry badge = UNSEEN customer activity (new lead events since each
+  // row was last acknowledged) — NOT lib/telemetry's ping counter, which
+  // counts the operator's own dashboard clicks. Hidden at zero: it's a
+  // notification, not a lifetime tally.
+  const telemetryUnseen = useLeadActivityUnseenTotal();
   const { can, roleLabel } = useRbac();
   // Live count for the Pipeline badge — reflects the real public.leads total
   // (polls + refreshes on focus), so the badge is never a stale placeholder.
@@ -162,10 +166,15 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert }: S
                   const Icon = item.icon;
                   const badge =
                     item.id === "telemetry"
-                      ? pings.toLocaleString("en-US")
+                      ? telemetryUnseen > 0
+                        ? formatInt(telemetryUnseen)
+                        : undefined
                       : item.id === "pipeline"
                         ? pipelineBadge
                         : item.badge;
+                  // Telemetry's badge is a NOTIFICATION (new lead activity) —
+                  // solid signal red, unlike the quiet informational counts.
+                  const notify = item.id === "telemetry" && !!badge;
                   return (
                     <button
                       key={item.id}
@@ -208,20 +217,26 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert }: S
                           className={cn(
                             "tnum rounded-full px-1.5 py-px text-[10px] font-semibold",
                             collapsed && "md:hidden",
-                            active
-                              ? "bg-primary/15 text-foreground"
-                              : "bg-muted text-muted-foreground",
+                            notify
+                              ? "bg-primary-solid text-primary-foreground"
+                              : active
+                                ? "bg-primary/15 text-foreground"
+                                : "bg-muted text-muted-foreground",
                           )}
                         >
                           {badge}
                         </span>
                       )}
                       {/* collapsed rail: surface the badge as a corner dot so counts
-                          aren't silently lost when labels hide */}
+                          aren't silently lost when labels hide (blinking when it's
+                          the new-activity notification) */}
                       {badge && collapsed && (
                         <span
                           aria-hidden
-                          className="absolute right-1.5 top-1.5 hidden h-1.5 w-1.5 rounded-full bg-primary md:block"
+                          className={cn(
+                            "absolute right-1.5 top-1.5 hidden h-1.5 w-1.5 rounded-full bg-primary md:block",
+                            notify && "motion-safe:animate-notify-blink",
+                          )}
                         />
                       )}
                     </button>

@@ -355,3 +355,76 @@ export async function GET(req: Request): Promise<Response> {
 
   return Response.json({ ok: true, mode: "live", leads, anonymous });
 }
+
+// DELETE /api/portal/lead-activity?leadId=<uuid> — remove ONE lead's click
+// trail from the Telemetry tab. Deletes every portal_events row carrying that
+// lead_id (customer-journey events AND any cookie-stamped dashboard noise), so
+// the lead drops out of this page and out of /api/portal/summary's attributed
+// totals alike. The leads table itself is untouched — this erases activity,
+// not the lead. Same gates as the GET: sameOrigin floor + PORTAL_ADMIN_KEY
+// shared secret (a delete is at least as sensitive as the per-lead read).
+export async function DELETE(req: Request): Promise<Response> {
+  if (!sameOrigin(req)) {
+    return Response.json({ ok: false, deleted: 0, mode: "live", error: "Forbidden." }, { status: 403 });
+  }
+
+  const target = supabaseTarget();
+  if (target.state === "demo") {
+    // Demo rows are a client-side constant (and their ids aren't uuids) —
+    // nothing to delete server-side; the page drops the row locally.
+    return Response.json({ ok: true, deleted: 0, mode: "demo" });
+  }
+
+  const leadId = new URL(req.url).searchParams.get("leadId");
+  // isUuid also makes the eq. interpolation safe (uuids never need quoting).
+  if (!isUuid(leadId)) {
+    return Response.json(
+      { ok: false, deleted: 0, mode: "live", error: "A valid lead id is required." },
+      { status: 400 },
+    );
+  }
+  if (!portalAdminAuthorized(req)) {
+    return Response.json({ ...UNAUTHORIZED, deleted: 0, mode: "live" }, { status: 401 });
+  }
+  if (target.state === "misconfigured") {
+    console.error("[portal/lead-activity] SUPABASE_URL is not a valid URL.");
+    return Response.json(
+      { ok: false, deleted: 0, mode: "live", error: "Portal storage is misconfigured." },
+      { status: 500 },
+    );
+  }
+
+  let res: Response;
+  try {
+    res = await fetch(`${target.base}/rest/v1/portal_events?lead_id=eq.${leadId}&select=id`, {
+      method: "DELETE",
+      headers: {
+        apikey: target.key,
+        Authorization: `Bearer ${target.key}`,
+        Prefer: "return=representation",
+      },
+    });
+  } catch (e) {
+    console.error("[portal/lead-activity] delete fetch failed:", e);
+    return Response.json(
+      { ok: false, deleted: 0, mode: "live", error: "Could not reach the database." },
+      { status: 502 },
+    );
+  }
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    console.error(`[portal/lead-activity] Supabase DELETE ${res.status}:`, detail.slice(0, 1000));
+    if (isMissingPortalTable(res.status, detail)) {
+      return Response.json({ ok: true, deleted: 0, mode: "demo", needsMigration: true });
+    }
+    return Response.json(
+      { ok: false, deleted: 0, mode: "live", error: "The database rejected the delete." },
+      { status: 502 },
+    );
+  }
+
+  const deletedRows = await res.json().catch(() => []);
+  const deleted = Array.isArray(deletedRows) ? deletedRows.length : 0;
+  return Response.json({ ok: true, deleted, mode: "live" });
+}

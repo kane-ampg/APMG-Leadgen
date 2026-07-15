@@ -12,18 +12,20 @@ export const DEFAULT_CAMPAIGN = "outreach-2026";
 
 /** Default subject line. APMG sells property maintenance TO the recipient — not
  *  lead generation — so the copy pitches trusted, one-partner upkeep. */
-export const DEFAULT_SUBJECT = "One trusted partner for your property maintenance";
+export const DEFAULT_SUBJECT = "Your property maintenance, sorted by one local crew";
 
 /**
  * Default HTML body. `{{business}}` and `{{link}}` are the two merge tokens:
  * the recipient's business name and the per-lead tracked CTA URL. Framed as
  * APMG's real offer — multi-trade property maintenance for the recipient's own
- * facility — never a lead-generation / "more customers" pitch.
+ * facility — never a lead-generation / "more customers" pitch. Copy mirrors the
+ * live AI compose prompt's tone: natural Australian English, genuine intro, the
+ * "who's the best person" ask, and the category-agnostic Aussie CTA label.
  */
 export const DEFAULT_BODY_HTML = `<p>Hi {{business}},</p>
-<p>APMG Services is a Melbourne-based, multi-trade property maintenance partner covering painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe, all through one reliable team.</p>
-<p>We keep facilities like yours safe, compliant and well maintained, with minimal disruption to the people who rely on them.</p>
-<p><a href="{{link}}">See how APMG can help &rarr;</a></p>
+<p>We're APMG Services, a Melbourne-based property maintenance team covering painting, electrical, plumbing, carpentry, flooring, grounds and make safe works, all handled by one licensed local crew.</p>
+<p>We work with businesses like yours to keep sites safe, compliant and well maintained, working around your day so the people who rely on your site aren't disrupted. Who's the best person to speak to about your site's maintenance and repairs?</p>
+<p><a href="{{link}}">Your property, well looked after</a></p>
 <p>The APMG Services team</p>`;
 
 /** The merge tokens the composer documents to the user. */
@@ -34,12 +36,33 @@ export const MAX_RECIPIENTS = 1000;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Scraper junk that structurally looks like an email but never is one:
+// versioned CDN paths ("react@18.2.0", "react@18.umd.min.js"), asset filenames
+// ("logo@2x.png"), and bundler tokens that don't occur in real addresses. The
+// n8n Email Finder filters these too, but n8n runs its saved copy — this
+// app-side gate is the one that actually protects stored leads.
+const ASSET_TLD_RE =
+  /\.(js|mjs|cjs|css|map|json|png|jpe?g|gif|svg|webp|avif|ico|bmp|woff2?|ttf|otf|eot|mp[34]|webm|wasm|pdf|zip|gz|br|xml|txt|html?|php)$/i;
+const JUNK_TOKEN_RE = /(^|[.@-])(umd|esm|cjs|polyfill|webpack|wixpress|sentry|unpkg|jsdelivr)([.@-]|$)/i;
+
 export function isEmail(v: unknown): v is string {
-  return typeof v === "string" && EMAIL_RE.test(v.trim());
+  if (typeof v !== "string") return false;
+  const s = v.trim();
+  if (!EMAIL_RE.test(s)) return false;
+  const labels = s.slice(s.lastIndexOf("@") + 1).split(".");
+  // a real TLD is alphabetic (rejects "react@18.2.0"), and no domain label is
+  // a bare version number (rejects "lib@2.0.x")
+  if (!/^[a-z]{2,24}$/i.test(labels[labels.length - 1])) return false;
+  if (labels.some((l) => /^\d+$/.test(l))) return false;
+  if (ASSET_TLD_RE.test(s) || JUNK_TOKEN_RE.test(s)) return false;
+  return true;
 }
 
 // Role-based local-parts a human would reach first, best → worst.
 const PREFERRED_LOCALPARTS = ["info", "contact", "sales", "hello", "office", "enquiries", "admin", "support"];
+
+/** Addresses that bounce or nobody reads — never picked, never topped-up. */
+const NO_REPLY_RE = /^(no-?reply|donotreply|bounce)@/i;
 
 /**
  * Pick the single best address to contact a business — prefers a role inbox
@@ -49,13 +72,42 @@ const PREFERRED_LOCALPARTS = ["info", "contact", "sales", "hello", "office", "en
 export function bestEmail(emails: readonly string[] | null | undefined): string | null {
   const list = (emails ?? []).map((e) => e.trim()).filter(Boolean);
   if (list.length === 0) return null;
-  const usable = list.filter((e) => !/^(no-?reply|donotreply|bounce)@/i.test(e));
+  const usable = list.filter((e) => !NO_REPLY_RE.test(e));
   const pool = usable.length ? usable : list;
   for (const p of PREFERRED_LOCALPARTS) {
     const hit = pool.find((e) => e.toLowerCase().startsWith(`${p}@`));
     if (hit) return hit;
   }
   return pool[0];
+}
+
+/** When a send resolves fewer than this many addresses (one best address per
+ *  lead), the recipient list is topped up with the alternate stored addresses
+ *  of leads that have more than one email — a small audience still reaches
+ *  every inbox we know about. At or above this count, one email per lead. */
+export const MIN_SEND_EMAILS = 50;
+
+/**
+ * A lead's remaining usable addresses for the top-up: valid, not a no-reply
+ * inbox, and not already in `used` (lowercased) — so the best address, and any
+ * address another lead already claimed, is never mailed twice. Order preserved
+ * from the stored list; the set is NOT mutated (callers own that).
+ */
+export function alternateEmails(
+  emails: readonly string[] | null | undefined,
+  used: ReadonlySet<string>,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of emails ?? []) {
+    const e = raw.trim();
+    const key = e.toLowerCase();
+    if (!isEmail(e) || NO_REPLY_RE.test(e)) continue;
+    if (used.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(e);
+  }
+  return out;
 }
 
 /** Validate a campaign tag used in the `?c=` tracking param and PostgREST-safe. */
@@ -163,9 +215,12 @@ export function htmlToText(html: string): string {
  * route substitutes the tracked URL per recipient.
  */
 
-/** Hard cap on leads per compose run — each lead costs one Claude call and the
- *  route drafts them sequentially, responding synchronously. */
-export const MAX_COMPOSE_LEADS = 10;
+/** Hard cap on leads per compose run — each lead costs one Claude call, and
+ *  the org's API tier only allows a few requests/minute, so big batches take
+ *  minutes regardless of pool width. 50 works on localhost (no route timeout);
+ *  on Vercel the route dies at maxDuration 300s, so cap deployed runs around
+ *  ~15-20 leads until the org's Anthropic rate tier is raised. */
+export const MAX_COMPOSE_LEADS = 50;
 
 /** Hard cap on leads per "Find emails" run — the n8n Email Finder fetches two
  *  pages per lead sequentially, so a large batch would outlive the webhook
@@ -297,7 +352,7 @@ export function demoDraft(lead: ComposeLeadInput): ComposeDraft {
     emails,
     email_source: emails.length ? "csv" : "none",
     best_email: bestEmail(emails),
-    subject: `Property maintenance & trades for ${lead.name}`.slice(0, 120),
+    subject: `${lead.name}, your property maintenance, sorted`.slice(0, 120),
     html,
   };
 }

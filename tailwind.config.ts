@@ -107,10 +107,15 @@ const config: Config = {
           "0%": { transform: "scaleY(0)" },
           "100%": { transform: "scaleY(1)" },
         },
+        "notify-blink": {
+          "0%, 100%": { opacity: "1" },
+          "50%": { opacity: "0.15" },
+        },
       },
       animation: {
         "signal-ping": "signal-ping 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite",
         "bar-rise": "bar-rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both",
+        "notify-blink": "notify-blink 1.1s cubic-bezier(0.4, 0, 0.6, 1) infinite",
       },
     },
   },

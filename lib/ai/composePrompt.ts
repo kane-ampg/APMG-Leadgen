@@ -48,10 +48,11 @@ Ground every claim in the APMG knowledge base below and follow its "Guardrails f
 - Use ONLY the services, sectors, tone, and facts stated in the knowledge base. Do NOT invent services, statistics, response times, years in business, coverage areas, certifications, client names, prices, or a personal sender name.
 - Open by addressing the recipient's specific business, and tie the pitch to its sector (aged care / early childhood / education / etc.), keeping their site safe, compliant, and well maintained with minimal disruption to the people who rely on it.
 - Keep APMG's real tone: practical, trustworthy, genuine care, never salesy growth-hacking language.
+- Every email must read as written fresh for its recipient. Never fall into one memorised template: vary the sentence openings, the services and details you pick from the knowledge base, the phrasing of the ask, and the overall rhythm, so two businesses in the same sector never receive near-identical emails. If the lead message names an angle to lead with, build the email around that angle.
 - Write in natural Australian English, the way an Australian business actually speaks: Australian spelling (organise, minimise, recognise, prioritise, maintained, licence, centre, colour, favourable) and plain, direct, understated wording. No Americanisms and no US spelling (never "elderly care", "senior care", "specialize", "customize", "gotten", "reach out to touch base"). Use each sector's real Australian terms exactly as the knowledge base does: "aged care" and "retirement living" (never "elderly care"), "early learning" and "childcare centre", "body corporate and strata", "facility management", "make safe works". Sound like a local Melbourne trades partner, professional and genuine, not a generic overseas sales template.
 
 Output rules:
-- subject: one specific, non-spammy line with no ALL CAPS, no "!!", under ~70 characters.
+- subject: one catchy, specific line under ~60 characters that makes a busy facility or centre manager want to open it. Lead with the recipient's sector or what APMG sorts out for them, in the same plain Aussie voice as the CTA labels, e.g. "Aged care maintenance, sorted", "One local crew for your whole centre", "Painting, plumbing and repairs, one team". Still no ALL CAPS, no "!!", no clickbait, and no spammy words like "free", "offer", "deal" or "guaranteed". The subject must not be a word-for-word copy of the CTA anchor label in the body; word them differently.
 - Never use ALL-CAPS phrases anywhere (subject or body), even if the knowledge base quotes phrases that way. Write in normal sentence case.
 - Do not use em dashes or en dashes anywhere in the subject or body. Use commas, colons, parentheses, or separate sentences instead.
 - html: plain HTML paragraphs only, with no inline styles, images, headings, or lists. Use exactly this structure: one greeting <p> that addresses the recipient's business by name; one or two short body <p> making the sector-relevant maintenance pitch; then the call-to-action as its OWN <p> containing EXACTLY one anchor whose href is the literal token, <a href="{{link}}">…</a> (never write a real URL such as apmgservices.com.au; the sender substitutes the tracked link); then finally the sign-off <p>The APMG Services team</p>.
@@ -67,6 +68,19 @@ export const OUTPUT_SCHEMA: Record<string, unknown> = {
   required: ["subject", "html"],
   additionalProperties: false,
 };
+
+// Writing angles rotated across a compose batch (compose route: lead i gets
+// angle i % length). Each draft is an independent API call, so an in-prompt
+// "vary it" rule alone can't stop same-sector leads converging on one shape —
+// seeding a different lead angle per email guarantees the batch reads varied.
+export const COMPOSE_ANGLES = [
+  "the convenience of one licensed local crew handling every trade, instead of juggling separate contractors",
+  "safety and compliance: staying ahead of hazards, inspections and make safe works",
+  "minimal disruption: scheduling work around the people who use the site day to day",
+  "reliability on the small jobs: the repairs and upkeep that pile up between bigger projects",
+  "planned, scheduled maintenance that stops small issues turning into expensive ones",
+  "a genuine local introduction: a Melbourne team keen to look after sites like theirs",
+] as const;
 
 // The per-lead user message, as an editable template. {{business}} /
 // {{category}} / {{website}} are substituted per lead; a line whose only token

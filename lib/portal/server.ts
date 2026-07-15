@@ -145,6 +145,29 @@ export function portalAdminAuthorized(req: NextRequest | Request): boolean {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
+/**
+ * Operator-browser marker. middleware.ts drops this cookie on any browser that
+ * loads an admin dashboard page (a surface customer hosts never serve), and the
+ * telemetry writers check it so the operator clicking around their OWN app —
+ * including test-clicking tracked /t/ links and previewing /portal — can never
+ * pollute lead trails, funnel totals, or the anonymous-visitor rollup. The
+ * client-journey data must be from clients only.
+ */
+export const INTERNAL_COOKIE = "apmg_internal";
+
+/** True when the request comes from a browser marked internal (see above).
+ *  Parsed off the raw Cookie header, same approach as readAttribution. */
+export function isInternalRequest(req: NextRequest | Request): boolean {
+  const header = req.headers.get("cookie") ?? "";
+  for (const part of header.split(";")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() !== INTERNAL_COOKIE) continue;
+    return part.slice(eq + 1).trim() !== "";
+  }
+  return false;
+}
+
 /** Longest campaign slug we'll store — anything beyond this is a crafted URL,
  *  not a real campaign name. */
 const MAX_CAMPAIGN_LEN = 120;

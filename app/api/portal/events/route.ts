@@ -1,6 +1,7 @@
 import { sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import {
   insertPortalEvents,
+  isInternalRequest,
   lookupLead,
   readAttribution,
   type PortalEventRow,
@@ -71,6 +72,17 @@ function sanitizeProps(raw: unknown): Record<string, string> {
 export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ accepted: 0, mode: "live", error: "Forbidden." }, { status: 403 });
+  }
+
+  // OPERATOR TRAFFIC IS NOT TELEMETRY. A browser that has opened the admin
+  // dashboard carries the apmg_internal cookie (middleware.ts) — accept-and-
+  // drop its batches wholesale. Without this, an operator who test-clicked a
+  // tracked /t/ link carries apmg_ref too, and their OWN portal browsing
+  // (portal_view / portal_service_open — legit customer-journey names) would
+  // be written into that lead's trail and the funnel totals. The in-app
+  // inspector drawer is unaffected (it reads the client-side ring buffer).
+  if (isInternalRequest(req)) {
+    return Response.json({ accepted: 0, internal: true }, { status: 202 });
   }
 
   const target = supabaseTarget();

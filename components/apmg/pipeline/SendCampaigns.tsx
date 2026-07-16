@@ -118,7 +118,9 @@ type LoadState =
 /**
  * Send Campaigns (Automation) — the Pipeline sub-tab that turns stored leads
  * into a tracked outreach send. Three n8n-style nodes:
- *   1. Audience      — pick leads with a stored email (or a website, to hand-address in review)
+ *   1. Audience      — pick leads with a stored email (leads without one are
+ *                      excluded here; they live in their folder's "No email"
+ *                      section on the Leads tab)
  *   2. Compose       — "Compose email" drafts a per-lead email in-app with
  *                      Claude (app/api/pipeline/campaigns/compose), grounded in
  *                      the sector knowledge base for the lead's CSV Category.
@@ -243,12 +245,14 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     fetchLeads();
   }, [fetchLeads]);
 
-  // leads we can campaign: a stable id + a stored address, or a website (which
-  // can be hand-addressed while reviewing the draft)
+  // leads we can campaign: a stable id + a stored email address. Leads without
+  // an email are kept out of the audience entirely — they sit in the "No email"
+  // section of their folder on the Leads tab (where Find emails lives now)
+  // until an address is found for them.
   const targets = useMemo<LeadView[]>(
     () =>
       load.status === "ready"
-        ? load.rows.filter((r) => r.id && ((r.emails?.length ?? 0) > 0 || !!r.website))
+        ? load.rows.filter((r) => r.id && (r.emails?.length ?? 0) > 0)
         : [],
     [load],
   );
@@ -310,9 +314,6 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
 
   const term = q.trim().toLowerCase();
   // leads are scoped to the chosen folders — nothing shows until one is picked.
-  // Leads with a stored email sort to the top, website-only leads sink to the
-  // bottom (stable, so each group keeps its original order) — after Find emails
-  // refreshes the rows, the newly-addressed leads float up with the rest.
   const visible = useMemo(() => {
     if (folderSel.size === 0) return [];
     return targets
@@ -323,8 +324,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
             (r.website ?? "").toLowerCase().includes(term) ||
             (r.emails ?? []).some((e) => e.toLowerCase().includes(term))
           : true,
-      )
-      .sort((a, b) => Number((b.emails?.length ?? 0) > 0) - Number((a.emails?.length ?? 0) > 0));
+      );
   }, [targets, folderSel, term]);
 
   // the current selection (drives Compose) + how many need a website scrape
@@ -1256,8 +1256,8 @@ function AudiencePanel({
           title="Choose your audience"
           meta={
             load.status === "ready"
-              ? `${targetCount.toLocaleString("en-US")} lead${targetCount === 1 ? "" : "s"} with an email or website`
-              : "stored leads with an email or website"
+              ? `${targetCount.toLocaleString("en-US")} lead${targetCount === 1 ? "" : "s"} with a stored email`
+              : "stored leads with an email address"
           }
         />
         <div className="flex flex-wrap items-center gap-2">
@@ -1316,8 +1316,8 @@ function AudiencePanel({
           <p className="text-[13px] font-medium text-foreground">No campaignable leads yet</p>
           <p className="max-w-xs font-mono text-[10.5px] leading-relaxed text-muted-foreground">
             {load.mode === "demo"
-              ? "Connect Supabase, then import a CSV from the Leads tab — leads with an email or website show up here."
-              : "Import a CSV from the Leads tab. Leads with an email address — or a website you can hand-address in review — become campaign recipients."}
+              ? "Connect Supabase, then import a CSV from the Leads tab — leads with an email address show up here."
+              : "Import a CSV from the Leads tab. Leads with a stored email address become campaign recipients — leads without one sit in their folder's No email section until an address is found."}
           </p>
           {onSwitchToLeads && (
             <Button variant="outline" size="sm" onClick={onSwitchToLeads} data-track="campaign_goto_leads" className="mt-1 gap-1.5">

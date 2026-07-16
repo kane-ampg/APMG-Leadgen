@@ -17,6 +17,7 @@ import {
   MousePointerClick,
   RefreshCw,
   Send,
+  ShieldCheck,
   Trash2,
   Users,
   type LucideIcon,
@@ -214,6 +215,7 @@ const KIND_META: Record<LeadEventKind, { icon: LucideIcon; chip: string }> = {
   service: { icon: LayoutGrid, chip: "border-border bg-muted text-foreground" },
   enquiry: { icon: Send, chip: "border-transparent bg-primary-solid text-primary-foreground" },
   website: { icon: Globe, chip: "border-border bg-background text-muted-foreground" },
+  consent: { icon: ShieldCheck, chip: "border-border bg-background text-muted-foreground" },
   other: { icon: Activity, chip: "border-dashed border-border bg-background text-muted-foreground" },
 };
 

@@ -34,7 +34,11 @@ const EVENT_NAME_RE = /^[\w.-]{1,60}$/;
  *  the inquiries route). A client-submitted event with one of these names is a
  *  forgery attempt — accepting it would let anyone inflate the canonical
  *  funnel counts (/api/portal/summary) from curl — so it is skipped. */
-const SERVER_RESERVED_EVENT_NAMES = new Set(["attribution_click", "portal_inquiry"]);
+const SERVER_RESERVED_EVENT_NAMES = new Set([
+  "attribution_click",
+  "portal_inquiry",
+  "portal_consent_accept",
+]);
 /** Trust the browser clock only within a week of ours — beyond that the
  *  client_ts would poison time-series analysis, so store null instead. */
 const MAX_CLIENT_CLOCK_SKEW_MS = 7 * 24 * 60 * 60 * 1000;

@@ -66,6 +66,9 @@ export interface LeadActivityEvent {
   /** redirect target from props.destination (attribution_click) — lets the UI
    *  tell a PDF download apart from a plain email-link click */
   destination: string | null;
+  /** accepted legal version from props.consent_version / props.version
+   *  (portal_consent_accept / legal_ack) — absent on every other event */
+  version?: string | null;
   /** server-side created_at, ISO */
   ts: string;
 }

@@ -233,7 +233,24 @@ export async function POST(req: Request): Promise<Response> {
   // a telemetry hiccup here is logged (inside insertPortalEvents) and
   // otherwise ignored.
   if (!internal) {
+    const ua = req.headers.get("user-agent")?.slice(0, 400) ?? null;
+    const referer = req.headers.get("referer")?.slice(0, 600) ?? null;
     await insertPortalEvents(target.base, target.key, [
+      {
+        // The consent gate above proved this enquirer accepted the CURRENT
+        // Privacy Policy & Terms — record that acceptance as its own event so
+        // the lead's Telemetry trail shows it explicitly (the enquiry row's
+        // consent_version column remains the authoritative record). Server-
+        // emitted only: the name is in SERVER_RESERVED_EVENT_NAMES, so the
+        // public sink rejects client forgeries of it.
+        event: "portal_consent_accept",
+        props: { service, consent_version: legal.version, scope: "enquiry" },
+        lead_id: leadId,
+        campaign,
+        category: lead?.category ?? null,
+        ua,
+        referer,
+      },
       {
         event: "portal_inquiry",
         // consent_version rides in props so the canonical funnel event also
@@ -242,8 +259,8 @@ export async function POST(req: Request): Promise<Response> {
         lead_id: leadId,
         campaign,
         category: lead?.category ?? null,
-        ua: req.headers.get("user-agent")?.slice(0, 400) ?? null,
-        referer: req.headers.get("referer")?.slice(0, 600) ?? null,
+        ua,
+        referer,
       },
     ]);
   }

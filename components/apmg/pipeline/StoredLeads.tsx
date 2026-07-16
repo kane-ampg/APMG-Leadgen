@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Database,
   Folder,
+  Globe,
   Pencil,
   RefreshCw,
   Search,
@@ -16,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { MAX_FIND_LEADS } from "@/lib/pipeline/campaign";
 import { Button } from "@/components/ui/button";
 import { ErrorInline, LeadsTableView, TableSkeleton, type LeadView } from "./LeadsTable";
 import { LeadDetail } from "./LeadDetail";
@@ -139,6 +141,10 @@ function SelectableLeads({
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<LeadView | null>(null);
+  // Find emails run over the No email section (n8n Email Finder)
+  const [finding, setFinding] = useState(false);
+  const [findNote, setFindNote] = useState<string | null>(null);
+  const [findError, setFindError] = useState<string | null>(null);
 
   // drop selected ids that no longer exist (after a refresh)
   useEffect(() => {
@@ -161,6 +167,14 @@ function SelectableLeads({
       )
     : rows;
 
+  // Leads split by whether they carry a stored address: no-email leads are
+  // excluded from campaigns (Send Campaigns only lists leads with an email),
+  // so they get their own section here — with Find emails to recover them.
+  const withEmail = filtered.filter((r) => (r.emails?.length ?? 0) > 0);
+  const noEmail = filtered.filter((r) => (r.emails?.length ?? 0) === 0);
+  // no-email leads the Email Finder can work on: it scrapes the lead's website
+  const findable = noEmail.filter((r) => r.id && r.website);
+
   // export exactly what's on screen: checked rows if any, else the filtered view
   const exportRows =
     selected.size > 0 ? filtered.filter((r) => r.id && selected.has(r.id)) : filtered;
@@ -173,14 +187,63 @@ function SelectableLeads({
       return next;
     });
   }
-  function toggleAll() {
+  // select-all is per table section (With email / No email / single list)
+  function toggleAllOf(section: LeadView[]) {
     setSelected((prev) => {
-      const ids = filtered.map((r) => r.id).filter((x): x is string => !!x);
+      const ids = section.map((r) => r.id).filter((x): x is string => !!x);
       const allOn = ids.length > 0 && ids.every((id) => prev.has(id));
       const next = new Set(prev);
       ids.forEach((id) => (allOn ? next.delete(id) : next.add(id)));
       return next;
     });
+  }
+  const selectionFor = (section: LeadView[]) => ({
+    selected,
+    onToggle: toggle,
+    onToggleAll: () => toggleAllOf(section),
+  });
+
+  // "Find emails" — POST the no-email leads that have a website to the n8n
+  // Email Finder (same route Send Campaigns used to call). Found addresses are
+  // persisted onto the lead rows server-side; onChanged() refetches, so the
+  // newly-addressed leads move up into the With email section.
+  async function findEmails() {
+    const batch = findable
+      .slice(0, MAX_FIND_LEADS)
+      .map((r) => ({ id: r.id!, website: r.website! }));
+    if (batch.length === 0 || finding) return;
+    setFinding(true);
+    setFindNote(null);
+    setFindError(null);
+    try {
+      const res = await fetch("/api/pipeline/campaigns/find-emails", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leads: batch }),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; mode?: "live" | "demo" | "noop"; found?: number; error?: string }
+        | null;
+      if (!res.ok || !data?.ok) {
+        setFindError(data?.error ?? `The email finder responded ${res.status}.`);
+        return;
+      }
+      if (data.mode === "demo") {
+        setFindNote("The Email Finder automation isn't connected — add its webhook on the Integrations tab, then try again.");
+        return;
+      }
+      const found = data.found ?? 0;
+      setFindNote(
+        `Found addresses for ${found.toLocaleString("en-US")} of ${batch.length.toLocaleString("en-US")} lead${batch.length === 1 ? "" : "s"}.${
+          found < batch.length ? " The rest had nothing scrapable." : ""
+        }`,
+      );
+      onChanged();
+    } catch {
+      setFindError("Network error reaching the email finder.");
+    } finally {
+      setFinding(false);
+    }
   }
 
   async function deleteSelected() {
@@ -281,12 +344,73 @@ function SelectableLeads({
         </p>
       )}
 
-      <LeadsTableView
-        rows={filtered}
-        selection={{ selected, onToggle: toggle, onToggleAll: toggleAll }}
-        onView={setViewing}
-        emptyHint={term ? `No leads match “${q.trim()}”.` : emptyHint}
-      />
+      {noEmail.length === 0 ? (
+        // no split needed: every lead has an address (or the list is empty)
+        <LeadsTableView
+          rows={filtered}
+          selection={selectionFor(filtered)}
+          onView={setViewing}
+          emptyHint={term ? `No leads match “${q.trim()}”.` : emptyHint}
+        />
+      ) : (
+        <>
+          {withEmail.length > 0 && (
+            <>
+              <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+                With email · {withEmail.length.toLocaleString("en-US")}
+              </div>
+              <LeadsTableView
+                rows={withEmail}
+                selection={selectionFor(withEmail)}
+                onView={setViewing}
+                emptyHint=""
+              />
+            </>
+          )}
+
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              No email · {noEmail.length.toLocaleString("en-US")}
+            </div>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              left out of campaigns until an address is found
+            </span>
+            {findable.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                data-track="leads_find_emails"
+                disabled={finding}
+                onClick={() => void findEmails()}
+                className="ml-auto gap-1.5"
+              >
+                {finding ? (
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                ) : (
+                  <Globe className="h-3.5 w-3.5" aria-hidden />
+                )}
+                {finding
+                  ? "Finding emails…"
+                  : `Find emails (${Math.min(findable.length, MAX_FIND_LEADS).toLocaleString("en-US")})`}
+              </Button>
+            )}
+          </div>
+          {findError && (
+            <p role="alert" className="font-mono text-[11px] text-destructive">
+              {findError}
+            </p>
+          )}
+          {!findError && findNote && (
+            <p className="font-mono text-[11px] text-muted-foreground">{findNote}</p>
+          )}
+          <LeadsTableView
+            rows={noEmail}
+            selection={selectionFor(noEmail)}
+            onView={setViewing}
+            emptyHint=""
+          />
+        </>
+      )}
 
       {viewing && <LeadDetail lead={viewing} onClose={() => setViewing(null)} />}
     </div>

@@ -31,6 +31,8 @@ export interface LeadActivityEvent {
   event: string;
   service: string | null;
   destination: string | null;
+  /** accepted legal version (portal_consent_accept / legal_ack only) */
+  version?: string | null;
   ts: string;
 }
 
@@ -131,6 +133,7 @@ export type LeadEventKind =
   | "service"
   | "enquiry"
   | "website"
+  | "consent"
   | "other";
 
 function isPackDownload(destination: string | null): boolean {
@@ -151,6 +154,11 @@ export function eventKind(ev: Pick<LeadActivityEvent, "event" | "destination">):
       return "enquiry";
     case "portal_website_click":
       return "website";
+    // Consent trail: the page-entry gate ack (legal_ack) and the validated
+    // enquiry-form consent (server-emitted portal_consent_accept).
+    case "legal_ack":
+    case "portal_consent_accept":
+      return "consent";
     default:
       return "other";
   }
@@ -158,7 +166,7 @@ export function eventKind(ev: Pick<LeadActivityEvent, "event" | "destination">):
 
 /** The one sentence a human reads for this event — the spec's mapping table. */
 export function eventLabel(
-  ev: Pick<LeadActivityEvent, "event" | "service" | "destination">,
+  ev: Pick<LeadActivityEvent, "event" | "service" | "destination" | "version">,
 ): string {
   switch (eventKind(ev)) {
     case "download":
@@ -177,6 +185,14 @@ export function eventLabel(
       return ev.service ? `Sent an enquiry — ${serviceName(ev.service)}` : "Sent an enquiry";
     case "website":
       return "Opened apmgservices.com.au";
+    case "consent": {
+      // The version tag matters for compliance reads ("which wording did they
+      // agree to?"), so it rides in the label when the event carried one.
+      const version = ev.version ? ` · v${ev.version}` : "";
+      return ev.event === "legal_ack"
+        ? `Accepted the Terms & Privacy Policy — portal entry${version}`
+        : `Accepted the Terms & Privacy Policy — enquiry consent${version}`;
+    }
     default:
       return humanise(ev.event);
   }
@@ -214,10 +230,12 @@ export const DEMO_LEAD_ACTIVITY: LeadActivity[] = [
     lastSeen: hoursAgo(1),
     events: [
       { event: "attribution_click", service: null, destination: DEMO_PORTAL_URL, ts: hoursAgo(1.5) },
+      { event: "legal_ack", service: null, destination: null, version: "1.0", ts: hoursAgo(1.47) },
       { event: "portal_view", service: null, destination: null, ts: hoursAgo(1.45) },
       { event: "portal_service_open", service: "painting", destination: null, ts: hoursAgo(1.35) },
       { event: "portal_service_open", service: "handyman", destination: null, ts: hoursAgo(1.25) },
       { event: "attribution_click", service: null, destination: DEMO_PACK_URL, ts: hoursAgo(1.15) },
+      { event: "portal_consent_accept", service: "painting", destination: null, version: "1.0", ts: hoursAgo(1.01) },
       { event: "portal_inquiry", service: "painting", destination: null, ts: hoursAgo(1) },
     ],
     counts: { emailClicks: 2, portalViews: 1, serviceOpens: 2, inquiries: 1 },

@@ -46,7 +46,13 @@ const INQUIRY_DUP_EVENT = "portal_inquiry_submit";
  *  `view = "portal"` (delegated data-track clicks on /portal) this predicate
  *  picks anonymous PORTAL rows out of lead_id-null traffic — which otherwise
  *  includes internal dashboard click noise that must NOT leak into this page. */
-const ANON_PORTAL_EVENT_NAMES = new Set(["portal_view", "portal_service_open", "portal_inquiry"]);
+const ANON_PORTAL_EVENT_NAMES = new Set([
+  "portal_view",
+  "portal_service_open",
+  "portal_inquiry",
+  "legal_ack",
+  "portal_consent_accept",
+]);
 
 /** Attributed rows are NOT customer-side by construction: the /t/[id] redirect
  *  sets the long-lived apmg_ref cookie on THIS origin, so an operator who
@@ -62,6 +68,12 @@ const ATTRIBUTED_EVENT_NAMES = new Set([
   "portal_view",
   "portal_service_open",
   "portal_inquiry",
+  // Consent trail: `legal_ack` = the page-entry "I Accept & Continue" gate
+  // (client-emitted, portal-only); `portal_consent_accept` = the validated
+  // enquiry-form consent (server-emitted, reserved name). Both are customer-
+  // journey events — they only ever fire on the public portal.
+  "legal_ack",
+  "portal_consent_accept",
 ]);
 const ATTRIBUTED_QUERY =
   `portal_events?select=event,props,lead_id,campaign,category,created_at` +
@@ -72,7 +84,8 @@ const ANON_SELECT = "select=event,props,view,visitor_id,created_at";
 /** Standard PostgREST boolean group — ANDed with the sibling query-string
  *  filters. The identical predicate is re-applied in-route (belt & braces,
  *  and it's what the 400 fallback below relies on). */
-const ANON_OR_FILTER = "or=(view.eq.portal,event.in.(portal_view,portal_service_open,portal_inquiry))";
+const ANON_OR_FILTER =
+  "or=(view.eq.portal,event.in.(portal_view,portal_service_open,portal_inquiry,legal_ack,portal_consent_accept))";
 const ANON_QUERY =
   `portal_events?${ANON_SELECT}&lead_id=is.null&${ANON_OR_FILTER}` +
   `&order=created_at.desc&limit=${EVENTS_LIMIT}`;
@@ -264,6 +277,9 @@ export async function GET(req: Request): Promise<Response> {
         event: row.event,
         service: propStr(row.props, "service"),
         destination: propStr(row.props, "destination"),
+        // Accepted legal version: portal_consent_accept carries it as
+        // consent_version, the gate's legal_ack as version.
+        version: propStr(row.props, "consent_version") ?? propStr(row.props, "version"),
         ts: row.created_at,
       });
     }

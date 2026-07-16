@@ -6,6 +6,7 @@ import {
   Activity,
   AlertTriangle,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Eye,
   FileDown,
@@ -92,6 +93,9 @@ const EASE = [0.22, 1, 0.36, 1] as const;
  *  (the app's grammar everywhere else, e.g. useLeadStats; no websocket infra),
  *  paused while the tab is hidden and topped up on focus. */
 const POLL_MS = 10000;
+
+/** Lead-activity list page size — the panel paginates past this. */
+const PAGE_SIZE = 25;
 
 /* ───────────────────────────  load state  ─────────────────────────── */
 
@@ -751,6 +755,10 @@ interface SummaryPayload {
 export function TelemetryPage() {
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  /** Lead-activity list page (0-based). Never trusted directly — the render
+   *  clamps it, so a shrinking list (deletes, refetch) can't strand the view
+   *  on a page that no longer exists. */
+  const [page, setPage] = useState(0);
   /** Per-lead NEW (unacknowledged) event counts — the blinking row dots. */
   const unseenByLead = useLeadActivityUnseenByLead();
   /** True while a MANUAL refresh is in flight — the page stays "ready" during
@@ -1029,7 +1037,23 @@ export function TelemetryPage() {
       leads.reduce((sum, l) => sum + l.events.filter((e) => !isHiddenEvent(e.event)).length, 0),
     [leads],
   );
-  const lastSignal = leads[0]?.lastSeen ?? null;
+
+  // Latest activity always on top: the live API sorts lastSeen-desc already,
+  // but the demo preset (and any payload drift) shouldn't be trusted to —
+  // uniform ISO-8601 UTC stamps make the string compare a correct time order.
+  const sortedLeads = useMemo(
+    () =>
+      [...leads].sort((a, b) => (a.lastSeen < b.lastSeen ? 1 : a.lastSeen > b.lastSeen ? -1 : 0)),
+    [leads],
+  );
+  const pageCount = Math.max(1, Math.ceil(sortedLeads.length / PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const pagedLeads = useMemo(
+    () => sortedLeads.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE),
+    [sortedLeads, safePage],
+  );
+
+  const lastSignal = sortedLeads[0]?.lastSeen ?? null;
 
   return (
     <div className="flex min-h-full flex-col px-4 py-5 sm:px-6">
@@ -1189,28 +1213,67 @@ export function TelemetryPage() {
                     hint="No attributed clicks yet — trails appear the moment a lead opens a tracked outreach email."
                   />
                 ) : (
-                  <ul>
-                    {leads.map((lead) => (
-                      <LeadRow
-                        key={lead.leadId}
-                        lead={lead}
-                        open={expanded.has(lead.leadId)}
-                        unseen={unseenByLead.get(lead.leadId) ?? 0}
-                        onToggle={toggleLead}
-                        deletePhase={
-                          deleteFlow?.id === lead.leadId
-                            ? deleteFlow.busy
-                              ? "busy"
-                              : "confirm"
-                            : null
-                        }
-                        deleteError={deleteFlow?.id === lead.leadId ? deleteFlow.error : null}
-                        onDeleteRequest={requestDelete}
-                        onDeleteCancel={cancelDelete}
-                        onDeleteConfirm={confirmDelete}
-                      />
-                    ))}
-                  </ul>
+                  <>
+                    <ul>
+                      {pagedLeads.map((lead) => (
+                        <LeadRow
+                          key={lead.leadId}
+                          lead={lead}
+                          open={expanded.has(lead.leadId)}
+                          unseen={unseenByLead.get(lead.leadId) ?? 0}
+                          onToggle={toggleLead}
+                          deletePhase={
+                            deleteFlow?.id === lead.leadId
+                              ? deleteFlow.busy
+                                ? "busy"
+                                : "confirm"
+                              : null
+                          }
+                          deleteError={deleteFlow?.id === lead.leadId ? deleteFlow.error : null}
+                          onDeleteRequest={requestDelete}
+                          onDeleteCancel={cancelDelete}
+                          onDeleteConfirm={confirmDelete}
+                        />
+                      ))}
+                    </ul>
+                    {/* pager foot — only exists once the list outgrows a page */}
+                    {sortedLeads.length > PAGE_SIZE && (
+                      <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2.5">
+                        <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                          {formatInt(safePage * PAGE_SIZE + 1)}–
+                          {formatInt(Math.min((safePage + 1) * PAGE_SIZE, sortedLeads.length))} of{" "}
+                          {formatInt(sortedLeads.length)}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={safePage === 0}
+                            onClick={() => setPage(safePage - 1)}
+                            data-track="telemetry_page_prev"
+                            className="gap-1"
+                          >
+                            <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
+                            Prev
+                          </Button>
+                          <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                            Page {formatInt(safePage + 1)} / {formatInt(pageCount)}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={safePage >= pageCount - 1}
+                            onClick={() => setPage(safePage + 1)}
+                            data-track="telemetry_page_next"
+                            className="gap-1"
+                          >
+                            Next
+                            <ChevronRight className="h-3.5 w-3.5" aria-hidden />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 )}
               </section>
             </Reveal>

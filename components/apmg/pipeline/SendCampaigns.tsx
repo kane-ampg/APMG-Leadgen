@@ -32,6 +32,7 @@ import { useFocusTrap } from "@/lib/useFocusTrap";
 import {
   alternateEmails,
   bestEmail,
+  COMPOSE_CHUNK_LEADS,
   DEFAULT_BODY_HTML,
   DEFAULT_CAMPAIGN,
   DEFAULT_SUBJECT,
@@ -159,6 +160,9 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // snapshot of the batch actually submitted (so the drafting UI shows the
   // submitted count even if the audience is edited mid-run)
   const [composeBatch, setComposeBatch] = useState({ count: 0, scrape: 0 });
+  // drafts completed so far in the running compose — the batch goes to the
+  // route in COMPOSE_CHUNK_LEADS-sized requests, so this advances per chunk
+  const [composeDone, setComposeDone] = useState(0);
 
   // ── email finder (scrape addresses for website-only leads via n8n) ──
   const [findPhase, setFindPhase] = useState<FindPhase>("idle");
@@ -199,6 +203,16 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // lead ids the current drafts were composed for — used to invalidate stale
   // drafts when the audience changes.
   const composedIdsRef = useRef<Set<string>>(new Set());
+  // a failed chunked-compose run's finished drafts, keyed by lead id — kept
+  // (with its batch key) so Try again resumes from the failed chunk instead of
+  // re-drafting (and re-paying for) the leads that already came back.
+  const composePartialRef = useRef<{
+    key: string;
+    done: Map<string, ComposeDraft>;
+    drafted: number;
+    saved: number;
+    anyLive: boolean;
+  } | null>(null);
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -493,6 +507,9 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       setApproved(new Set());
       setDraftIdx(0);
       setComposeInfo(null);
+      // a parked partial run belongs to the old audience too (its batch key
+      // wouldn't match anyway — this just frees it)
+      composePartialRef.current = null;
       // the batch plan was cut from the audience these drafts were composed
       // for — an audience edit voids the queued batches along with the drafts
       setBatchQueue([]);
@@ -534,10 +551,16 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     });
   }
 
-  /** POST one batch of leads to the in-app composer, which drafts a per-lead
+  /** Draft one batch of leads with the in-app composer, which writes a per-lead
    *  email with Claude grounded in the sector knowledge base for the lead's
    *  Category. Addresses come from the stored CSV emails (or are added by hand
-   *  in review). Callers guarantee `batch` is within MAX_COMPOSE_LEADS. */
+   *  in review). Callers guarantee `batch` is within MAX_COMPOSE_LEADS.
+   *
+   *  The batch goes to the route as COMPOSE_CHUNK_LEADS-sized requests, one
+   *  after another — one big request used to outlive the serverless gateway
+   *  (34 leads → 504) and lose every draft. Chunking keeps each request well
+   *  inside the timeout, advances composeDone as chunks land, and on failure
+   *  parks the finished drafts so Try again resumes from the failed chunk. */
   const composeLeads = useCallback(async (batch: LeadView[]) => {
     const tag = slugifyCampaign(campaign) || DEFAULT_CAMPAIGN;
     const runId = ++composeRunIdRef.current;
@@ -552,45 +575,99 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       scrape: batch.filter((r) => (r.emails?.length ?? 0) === 0).length,
     });
 
-    let res: Response;
-    try {
-      res = await fetch("/api/pipeline/campaigns/compose", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          campaign: tag,
-          leads: batch.map((r) => ({
-            id: r.id!,
-            name: r.name,
-            website: r.website ?? null,
-            category: r.category ?? null,
-            emails: r.emails ?? [],
-          })),
-        }),
-      });
-    } catch {
-      if (live()) {
-        setComposeError("Network error reaching the composer.");
-        setComposePhase("error");
-      }
-      return;
-    }
-    const data = (await res.json().catch(() => null)) as
-      | { ok?: boolean; mode?: "live" | "demo"; results?: ComposeDraft[]; drafted?: number; saved?: number; error?: string }
-      | null;
-    if (!live()) return;
-    if (!res.ok || !data?.ok || !Array.isArray(data.results)) {
-      setComposeError(data?.error ?? `The composer responded ${res.status}.`);
-      setComposePhase("error");
-      return;
+    // Resume: a prior failed run over this exact batch left its finished
+    // drafts behind — keep them and only draft the leads still missing.
+    const key = batch
+      .map((r) => r.id!)
+      .sort()
+      .join(",");
+    const prior = composePartialRef.current?.key === key ? composePartialRef.current : null;
+    const done = prior?.done ?? new Map<string, ComposeDraft>();
+    let drafted = prior?.drafted ?? 0;
+    let saved = prior?.saved ?? 0;
+    let anyLive = prior?.anyLive ?? false;
+    setComposeDone(done.size);
+
+    const todo = batch.filter((r) => !done.has(r.id!));
+    const chunks: LeadView[][] = [];
+    for (let i = 0; i < todo.length; i += COMPOSE_CHUNK_LEADS) {
+      chunks.push(todo.slice(i, i + COMPOSE_CHUNK_LEADS));
     }
 
-    const results = data.results;
+    type ComposeResponse = {
+      ok?: boolean;
+      mode?: "live" | "demo";
+      results?: ComposeDraft[];
+      drafted?: number;
+      saved?: number;
+      error?: string;
+    };
+    // null = network error; the caller retries once, then surfaces it
+    const post = async (part: LeadView[]): Promise<{ status: number; data: ComposeResponse | null } | null> => {
+      try {
+        const res = await fetch("/api/pipeline/campaigns/compose", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            campaign: tag,
+            leads: part.map((r) => ({
+              id: r.id!,
+              name: r.name,
+              website: r.website ?? null,
+              category: r.category ?? null,
+              emails: r.emails ?? [],
+            })),
+          }),
+        });
+        return { status: res.status, data: (await res.json().catch(() => null)) as ComposeResponse | null };
+      } catch {
+        return null;
+      }
+    };
+
+    for (const part of chunks) {
+      if (!live()) return;
+      let out = await post(part);
+      if (!out?.data?.ok || !Array.isArray(out.data.results)) {
+        // one automatic retry — a transient blip shouldn't cost the run
+        await sleep(1500);
+        if (!live()) return;
+        out = await post(part);
+      }
+      if (!live()) return;
+      const data = out?.data;
+      if (!out || !data?.ok || !Array.isArray(data.results)) {
+        // park the finished drafts so Try again resumes instead of restarting
+        composePartialRef.current = { key, done, drafted, saved, anyLive };
+        const detail = !out
+          ? "Network error reaching the composer."
+          : data?.error ?? `The composer responded ${out.status}.`;
+        setComposeError(
+          done.size > 0
+            ? `${detail} ${done.size.toLocaleString("en-US")} of ${batch.length.toLocaleString("en-US")} drafts are finished and kept — Try again picks up where it stopped.`
+            : detail,
+        );
+        setComposePhase("error");
+        return;
+      }
+      for (const d of data.results) done.set(d.id, d);
+      drafted += data.drafted ?? 0;
+      saved += data.saved ?? 0;
+      if ((data.mode ?? "demo") === "live") anyLive = true;
+      setComposeDone(done.size);
+    }
+
+    composePartialRef.current = null;
+    // reassemble in batch (audience) order; leads the server dropped as
+    // invalid just vanish, exactly as they did from a single response
+    const results = batch
+      .map((r) => done.get(r.id!))
+      .filter((d): d is ComposeDraft => d !== undefined);
     setDrafts(results);
     // everything sendable starts approved — deselect while reviewing
     setApproved(new Set(results.filter(draftSendable).map((d) => d.id)));
     setDraftIdx(0);
-    setComposeInfo({ mode: data.mode ?? "demo", saved: data.saved ?? 0, drafted: data.drafted ?? 0 });
+    setComposeInfo({ mode: anyLive ? "live" : "demo", saved, drafted });
     // record the composed audience so an audience change invalidates these drafts
     composedIdsRef.current = new Set(batch.map((r) => r.id!));
     setComposePhase("ready");
@@ -765,6 +842,8 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     runIdRef.current++;
     composeRunIdRef.current++;
     composedIdsRef.current = new Set();
+    composePartialRef.current = null;
+    setComposeDone(0);
     setSendPhase("idle");
     setSentShown(0);
     setSendTotal(0);
@@ -805,7 +884,9 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
 
   const liveMessage =
     composePhase === "running"
-      ? `Drafting ${composeBatch.count} personalized email${composeBatch.count === 1 ? "" : "s"} with Claude`
+      ? `Drafting ${composeBatch.count} personalized email${composeBatch.count === 1 ? "" : "s"} with Claude${
+          composeDone > 0 ? ` — ${composeDone} of ${composeBatch.count} done` : ""
+        }`
       : sendPhase === "sending"
         ? `Sending the campaign to ${recipientCount} recipients`
         : sendPhase === "done" && result
@@ -868,6 +949,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
         return (
           <DraftingPanel
             count={composeBatch.count}
+            done={composeDone}
             scrapeCount={composeBatch.scrape}
             batchLabel={batchLabel}
             reduce={reduce}
@@ -1614,11 +1696,13 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 /** Shown while Claude drafts each lead's email in-app, grounded in the KB. */
 function DraftingPanel({
   count,
+  done,
   scrapeCount,
   batchLabel,
   reduce,
 }: {
   count: number;
+  done: number;
   scrapeCount: number;
   batchLabel: string | null;
   reduce: boolean;
@@ -1637,20 +1721,38 @@ function DraftingPanel({
             {count.toLocaleString("en-US")}
           </div>
           <div className="mt-1 font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-            lead{count === 1 ? "" : "s"} being drafted
+            {done > 0
+              ? `${done.toLocaleString("en-US")} of ${count.toLocaleString("en-US")} drafted`
+              : `lead${count === 1 ? "" : "s"} being drafted`}
           </div>
         </div>
         <SignalLed className="mb-2 h-2.5 w-2.5" />
       </div>
 
-      {/* indeterminate sweep — the automation doesn't report per-lead progress */}
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-border" role="progressbar" aria-label="Drafting progress">
-        {!reduce && (
-          <motion.div
-            className="h-full w-1/3 rounded-full bg-primary"
-            animate={{ x: ["-110%", "320%"] }}
-            transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+      {/* drafts come back a chunk of leads at a time (several short requests
+          per run) — indeterminate sweep until the first chunk lands, then a
+          real fill */}
+      <div
+        className="h-1.5 w-full overflow-hidden rounded-full bg-border"
+        role="progressbar"
+        aria-label="Drafting progress"
+        aria-valuemin={0}
+        aria-valuemax={count}
+        aria-valuenow={done}
+      >
+        {done > 0 ? (
+          <div
+            className={cn("h-full rounded-full bg-primary", !reduce && "transition-[width] duration-500 ease-out")}
+            style={{ width: `${Math.min(100, Math.round((done / Math.max(count, 1)) * 100))}%` }}
           />
+        ) : (
+          !reduce && (
+            <motion.div
+              className="h-full w-1/3 rounded-full bg-primary"
+              animate={{ x: ["-110%", "320%"] }}
+              transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+            />
+          )
         )}
       </div>
 

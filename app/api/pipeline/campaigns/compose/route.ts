@@ -31,8 +31,16 @@ import { loadComposePrompt, type ComposePromptConfig } from "@/lib/ai/composeSto
 // real auth; enforce the `campaigns.send` permission here too once auth lands.
 export const runtime = "nodejs";
 // Leads are drafted through a small concurrency pool (one Claude call each) so
-// a full-cap batch still takes minutes; give serverless deploys the platform max.
+// a big request still takes minutes; give serverless deploys the platform max —
+// and guarantee a response BEFORE it (SOFT_DEADLINE_MS below): the gateway
+// 504ing a slow batch throws away every finished draft.
 export const maxDuration = 300;
+// Wall-clock budget for drafting. Past it, remaining leads ship as the
+// deterministic template and the response returns — an honest partial (the
+// client shows `drafted` as "N AI-written") beats a gateway timeout. Clients
+// keep requests small anyway (campaign.ts COMPOSE_CHUNK_LEADS); this is the
+// backstop for pathological 429 backoff chains on the org's rate tier.
+const SOFT_DEADLINE_MS = (maxDuration - 60) * 1000;
 
 const MAX_SUBJECT = 300;
 const MAX_HTML = 20_000;
@@ -166,15 +174,29 @@ export async function POST(req: Request): Promise<Response> {
   const results: ComposeDraft[] = new Array<ComposeDraft>(leads.length);
   let drafted = 0;
   let cursor = 0;
+  const startedAt = Date.now();
   const worker = async (): Promise<void> => {
     for (;;) {
       const i = cursor++;
       if (i >= leads.length) return;
       const lead = leads[i];
+      // Out of wall-clock budget — template-fill the rest instantly so the
+      // response beats the platform kill instead of 504ing the whole batch.
+      const remaining = SOFT_DEADLINE_MS - (Date.now() - startedAt);
+      if (remaining <= 0) {
+        results[i] = demoDraft(lead);
+        continue;
+      }
       // Rotate the writing angle per lead so same-sector emails in one batch
       // don't converge on a single shape (each draft is an independent call).
       const angle = COMPOSE_ANGLES[i % COMPOSE_ANGLES.length];
-      const { draft, ai } = await draftForLead(lead, await kbFor(lead.category), promptCfg, angle);
+      // Cap the draft at the remaining budget too: one call grinding through
+      // 429 backoffs must not carry the function past the deadline.
+      const { draft, ai } = await withDeadline(
+        draftForLead(lead, await kbFor(lead.category), promptCfg, angle),
+        remaining,
+        { draft: demoDraft(lead), ai: false },
+      );
       results[i] = draft;
       if (ai) drafted += 1;
     }
@@ -185,6 +207,19 @@ export async function POST(req: Request): Promise<Response> {
   // refusals) → report demo, so the UI flags "demo drafts" instead of passing
   // identical template copy off as per-lead AI writing.
   return json({ ok: true, mode: drafted > 0 ? "live" : "demo", campaign, results, drafted, saved: 0 });
+}
+
+/** Race `work` against a wall-clock budget, resolving with `fallback` when the
+ *  budget runs out first. The abandoned draft settles (or is discarded with the
+ *  function) harmlessly later — draftEmail never rejects. */
+function withDeadline<T>(work: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cap = new Promise<T>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms);
+  });
+  return Promise.race([work, cap]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
 }
 
 function json(result: ComposeResult, status = 200): Response {

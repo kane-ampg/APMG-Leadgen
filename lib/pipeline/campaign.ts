@@ -217,10 +217,18 @@ export function htmlToText(html: string): string {
 
 /** Hard cap on leads per compose run — each lead costs one Claude call, and
  *  the org's API tier only allows a few requests/minute, so big batches take
- *  minutes regardless of pool width. 50 works on localhost (no route timeout);
- *  on Vercel the route dies at maxDuration 300s, so cap deployed runs around
- *  ~15-20 leads until the org's Anthropic rate tier is raised. */
+ *  minutes regardless of pool width. The client submits a run as
+ *  COMPOSE_CHUNK_LEADS-sized requests, so this cap bounds the reviewed batch,
+ *  not a single HTTP request. */
 export const MAX_COMPOSE_LEADS = 50;
+
+/** Leads per compose REQUEST. A whole run in one request outlives the
+ *  serverless gateway (observed: 34 leads → 504 at maxDuration, every draft
+ *  lost), so the client (SendCampaigns) POSTs a run as chunks this size, back
+ *  to back: each request finishes comfortably inside the timeout, progress
+ *  lands chunk by chunk, and a failed chunk resumes without re-drafting the
+ *  leads already done. 8 ≈ four rounds of the route's 2-worker pool. */
+export const COMPOSE_CHUNK_LEADS = 8;
 
 /** Hard cap on leads per "Find emails" run — the n8n Email Finder fetches two
  *  pages per lead sequentially, so a large batch would outlive the webhook

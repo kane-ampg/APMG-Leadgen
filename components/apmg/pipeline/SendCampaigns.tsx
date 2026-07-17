@@ -938,6 +938,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           onSearch={setQ}
           onToggle={toggle}
           onToggleAll={toggleAll}
+          onSelectMany={setPicked}
           onRefresh={fetchLeads}
           onContinue={startCompose}
           onSwitchToLeads={onSwitchToLeads}
@@ -1207,6 +1208,7 @@ function AudiencePanel({
   onSearch,
   onToggle,
   onToggleAll,
+  onSelectMany,
   onRefresh,
   onContinue,
   onSwitchToLeads,
@@ -1231,6 +1233,7 @@ function AudiencePanel({
   onSearch: (v: string) => void;
   onToggle: (id: string) => void;
   onToggleAll: () => void;
+  onSelectMany: (next: Set<string>) => void;
   onRefresh: () => void;
   onContinue: () => void;
   onSwitchToLeads?: () => void;
@@ -1389,7 +1392,7 @@ function AudiencePanel({
 
               <LeadsTableView
                 rows={visible}
-                selection={{ selected: picked, onToggle, onToggleAll }}
+                selection={{ selected: picked, onToggle, onToggleAll, onSelectMany }}
                 emptyHint={q ? `No leads match “${q.trim()}”.` : "No leads in the selected folders."}
               />
             </>

@@ -172,8 +172,12 @@ function SelectableLeads({
   // so they get their own section here — with Find emails to recover them.
   const withEmail = filtered.filter((r) => (r.emails?.length ?? 0) > 0);
   const noEmail = filtered.filter((r) => (r.emails?.length ?? 0) === 0);
-  // no-email leads the Email Finder can work on: it scrapes the lead's website
+  // no-email leads the Email Finder can work on: it scrapes the lead's website.
+  // A multi-selection narrows the run to just the checked leads; with nothing
+  // checked in this section, the whole section is tried.
   const findable = noEmail.filter((r) => r.id && r.website);
+  const selectedFindable = findable.filter((r) => selected.has(r.id!));
+  const findTargets = selectedFindable.length > 0 ? selectedFindable : findable;
 
   // export exactly what's on screen: checked rows if any, else the filtered view
   const exportRows =
@@ -201,14 +205,17 @@ function SelectableLeads({
     selected,
     onToggle: toggle,
     onToggleAll: () => toggleAllOf(section),
+    // enables click + drag selection on the rows
+    onSelectMany: setSelected,
   });
 
-  // "Find emails" — POST the no-email leads that have a website to the n8n
-  // Email Finder (same route Send Campaigns used to call). Found addresses are
-  // persisted onto the lead rows server-side; onChanged() refetches, so the
-  // newly-addressed leads move up into the With email section.
+  // "Find emails" — POST the no-email leads that have a website (the checked
+  // ones if any, else the whole section) to the n8n Email Finder (same route
+  // Send Campaigns used to call). Found addresses are persisted onto the lead
+  // rows server-side; onChanged() refetches, so the newly-addressed leads move
+  // up into the With email section.
   async function findEmails() {
-    const batch = findable
+    const batch = findTargets
       .slice(0, MAX_FIND_LEADS)
       .map((r) => ({ id: r.id!, website: r.website! }));
     if (batch.length === 0 || finding) return;
@@ -391,7 +398,9 @@ function SelectableLeads({
                 )}
                 {finding
                   ? "Finding emails…"
-                  : `Find emails (${Math.min(findable.length, MAX_FIND_LEADS).toLocaleString("en-US")})`}
+                  : `Find emails (${Math.min(findTargets.length, MAX_FIND_LEADS).toLocaleString("en-US")}${
+                      selectedFindable.length > 0 ? " selected" : ""
+                    })`}
               </Button>
             )}
           </div>

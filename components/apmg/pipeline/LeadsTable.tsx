@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Eye, Inbox, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { bestEmail } from "@/lib/pipeline/campaign";
@@ -37,6 +38,9 @@ interface Selection {
   selected: Set<string>;
   onToggle: (id: string) => void;
   onToggleAll: () => void;
+  /** Replace the whole selection at once. Providing this enables click + drag
+   *  selection on the rows (press a row, sweep across its neighbours). */
+  onSelectMany?: (next: Set<string>) => void;
 }
 
 function Dash() {
@@ -60,6 +64,39 @@ export function LeadsTableView({
   selection?: Selection;
   onView?: (row: LeadView) => void;
 }) {
+  // Click + drag selection: press a row to toggle it, sweep to apply the same
+  // toggle to every row between the anchor and the cursor. The selection at
+  // press time is the base, so sweeping back out of a row restores it —
+  // rubber-band semantics, and other tables sharing the set are untouched.
+  const dragRef = useRef<{ anchor: number; on: boolean; base: Set<string> } | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const canDrag = !!selection?.onSelectMany;
+
+  useEffect(() => {
+    if (!dragging) return;
+    const end = () => {
+      dragRef.current = null;
+      setDragging(false);
+    };
+    window.addEventListener("mouseup", end);
+    return () => window.removeEventListener("mouseup", end);
+  }, [dragging]);
+
+  function applyDrag(current: number) {
+    const d = dragRef.current;
+    if (!d || !selection?.onSelectMany) return;
+    const next = new Set(d.base);
+    const lo = Math.min(d.anchor, current);
+    const hi = Math.max(d.anchor, current);
+    for (let j = lo; j <= hi; j++) {
+      const id = rows[j]?.id;
+      if (!id) continue;
+      if (d.on) next.add(id);
+      else next.delete(id);
+    }
+    selection.onSelectMany(next);
+  }
+
   if (rows.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-border bg-background/40 px-6 py-12 text-center">
@@ -116,9 +153,24 @@ export function LeadsTableView({
             return (
               <TableRow
                 key={r.id ?? i}
+                onMouseDown={
+                  canDrag && r.id
+                    ? (e) => {
+                        if (e.button !== 0) return;
+                        // let links, buttons and the checkbox behave natively
+                        if ((e.target as HTMLElement).closest("a, button, input")) return;
+                        e.preventDefault(); // no text-selection while sweeping
+                        dragRef.current = { anchor: i, on: !checked, base: new Set(selection!.selected) };
+                        setDragging(true);
+                        applyDrag(i);
+                      }
+                    : undefined
+                }
+                onMouseEnter={canDrag ? () => dragRef.current && applyDrag(i) : undefined}
                 className={cn(
                   "transition-colors duration-300 ease-out motion-reduce:transition-none hover:bg-muted/40",
                   checked && "bg-primary/[0.07]",
+                  canDrag && r.id && "cursor-pointer",
                 )}
               >
                 {selectable && (

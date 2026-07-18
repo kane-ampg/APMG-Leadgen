@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Image, { type StaticImageData } from "next/image";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { AlertTriangle, CircleCheck, Loader2, Send, X, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/cn";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { track } from "@/lib/telemetry";
 import { COMPANY } from "@/lib/legal/company";
@@ -29,6 +31,10 @@ export interface InquiryService {
   name: string;
   blurb: string;
   icon: LucideIcon;
+  /** Job-site photo shown as the modal's right-hand "book" panel (desktop).
+   *  Optional: the `general` enquiry path has no single trade photo, so it
+   *  falls back to a form-only modal. */
+  photo?: StaticImageData;
 }
 
 type Status = "idle" | "sending" | "sent" | "error";
@@ -274,12 +280,24 @@ export function ServiceInquiryModal({
               aria-modal="true"
               aria-label={`Enquire about ${service.name}`}
               tabIndex={-1}
-              className="w-[min(94vw,460px)] overflow-hidden rounded-2xl border border-border bg-card shadow-2xl outline-none"
+              className={cn(
+                "flex overflow-hidden rounded-2xl border border-border bg-card shadow-2xl outline-none",
+                // "Book split in half": with a trade photo, the dialog widens on
+                // desktop into a two-panel spread — form on the left, photo card
+                // on the right. Without one (the `general` enquiry), it stays the
+                // original single narrow column. Mobile is always single-column
+                // (a book can't open on a phone) — the photo panel hides below sm.
+                service.photo ? "w-[min(94vw,460px)] sm:w-[min(94vw,860px)]" : "w-[min(94vw,460px)]",
+              )}
               initial={reduce ? false : { opacity: 0, scale: 0.96, y: 8 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.97, y: 6 }}
               transition={{ duration: reduce ? 0 : 0.32, ease: EASE }}
             >
+              {/* ── Left page: header + form/success (the whole existing dialog
+                  body). min-w-0 lets it shrink beside the photo panel; on desktop
+                  with a photo it takes the left half, else the full width. ── */}
+              <div className="flex min-w-0 flex-1 flex-col">
               {/* header */}
               <div className="flex items-start gap-3 border-b border-border px-5 py-4">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-solid text-primary-foreground">
@@ -584,6 +602,47 @@ export function ServiceInquiryModal({
                     </Button>
                   </div>
                 </form>
+              )}
+              </div>
+
+              {/* ── Right page: the trade photo, like the facing page of an open
+                  book. Desktop-only (hidden below sm so the mobile modal stays a
+                  clean single column). A thin left border is the book's spine;
+                  the bottom gradient + service name caption seat the image and
+                  name the trade the enquiry is about. Decorative → alt="". ── */}
+              {service.photo && (
+                // rounded-r-2xl matches the dialog's own radius on THIS panel so
+                // the corner is clipped here too — Safari/WebKit can leak a
+                // child's square corner past a parent's `overflow-hidden` +
+                // rounded corners when the child forms its own stacking context,
+                // and the belt-and-braces radius closes that gap.
+                <div className="relative hidden w-[46%] shrink-0 self-stretch overflow-hidden rounded-r-2xl border-l border-border bg-muted sm:block">
+                  <Image
+                    src={service.photo}
+                    alt=""
+                    fill
+                    placeholder="blur"
+                    sizes="400px"
+                    // object-CONTAIN so the whole job-site photo is visible on
+                    // the book's right page — never cropped. The landscape photo
+                    // sits centred in the taller panel with bg-muted matting
+                    // above/below, matching the card banners and the hero.
+                    className="object-contain object-center"
+                  />
+                  {/* bottom scrim so the caption stays legible over any photo */}
+                  <span
+                    aria-hidden
+                    className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black/70 via-black/20 to-transparent"
+                  />
+                  <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 p-4">
+                    <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/15 text-white backdrop-blur-sm ring-1 ring-white/25">
+                      <service.icon className="h-4 w-4" aria-hidden />
+                    </span>
+                    <span className="font-heading text-sm font-semibold text-white drop-shadow-[0_1px_6px_rgba(0,0,0,0.8)]">
+                      {service.name}
+                    </span>
+                  </div>
+                </div>
               )}
             </motion.div>
           </div>

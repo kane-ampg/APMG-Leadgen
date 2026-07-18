@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { AlertTriangle, Eye, Inbox, RefreshCw } from "lucide-react";
+import { AlertTriangle, Eye, Inbox, RefreshCw, Send } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { bestEmail } from "@/lib/pipeline/campaign";
 import { Button } from "@/components/ui/button";
@@ -32,6 +32,8 @@ export interface LeadView {
   twitter?: string | null;
   batch?: string | null;
   created_at?: string | null;
+  /** how many outreach emails we've sent this lead (email_sent ledger) */
+  emails_sent?: number | null;
 }
 
 interface Selection {
@@ -136,14 +138,15 @@ export function LeadsTableView({
                 />
               </TableHead>
             )}
-            <TableHead>Business</TableHead>
-            <TableHead>Website</TableHead>
-            <TableHead>Phone</TableHead>
-            <TableHead>Email</TableHead>
-            <TableHead className="text-right">Rating</TableHead>
-            <TableHead className="text-right">Emails</TableHead>
-            <TableHead className="text-right">Socials</TableHead>
-            {onView && <TableHead className="text-right">Details</TableHead>}
+            <TableHead className="text-[12px]">Business</TableHead>
+            <TableHead className="text-[12px]">Website</TableHead>
+            <TableHead className="text-[12px]">Phone</TableHead>
+            <TableHead className="text-[12px]">Email</TableHead>
+            <TableHead className="text-right text-[12px]">Sent</TableHead>
+            <TableHead className="text-right text-[12px]">Rating</TableHead>
+            <TableHead className="text-right text-[12px]">Emails</TableHead>
+            <TableHead className="text-right text-[12px]">Socials</TableHead>
+            {onView && <TableHead className="text-right text-[12px]">Details</TableHead>}
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -195,9 +198,9 @@ export function LeadsTableView({
                   </TableCell>
                 )}
                 <TableCell className="max-w-[260px]">
-                  <div className="truncate text-[13px] text-foreground">{r.name}</div>
+                  <div className="truncate text-[15px] text-foreground">{r.name}</div>
                   {r.address && (
-                    <div className="mt-px truncate font-mono text-[10px] text-muted-foreground">
+                    <div className="mt-px truncate font-mono text-[12px] text-muted-foreground">
                       {r.address}
                     </div>
                   )}
@@ -209,7 +212,7 @@ export function LeadsTableView({
                       target="_blank"
                       rel="noreferrer"
                       data-track="lead_website"
-                      className="block truncate font-mono text-[11px] text-primary hover:underline"
+                      className="block truncate font-mono text-[13px] text-primary hover:underline"
                     >
                       {prettyUrl(r.website)}
                     </a>
@@ -217,7 +220,7 @@ export function LeadsTableView({
                     <Dash />
                   )}
                 </TableCell>
-                <TableCell className="tnum font-mono text-[12px] text-foreground">
+                <TableCell className="tnum font-mono text-[14px] text-foreground">
                   {r.phone ?? <Dash />}
                 </TableCell>
                 <TableCell className="max-w-[220px]">
@@ -225,7 +228,7 @@ export function LeadsTableView({
                     <a
                       href={`mailto:${email}`}
                       data-track="lead_email"
-                      className="block truncate font-mono text-[11px] text-primary hover:underline"
+                      className="block truncate font-mono text-[13px] text-primary hover:underline"
                     >
                       {email}
                     </a>
@@ -233,13 +236,26 @@ export function LeadsTableView({
                     <Dash />
                   )}
                 </TableCell>
-                <TableCell className="tnum text-right font-mono text-[12px] text-foreground">
+                <TableCell className="text-right">
+                  {r.emails_sent && r.emails_sent > 0 ? (
+                    <span
+                      title={`${r.emails_sent} outreach email${r.emails_sent === 1 ? "" : "s"} sent`}
+                      className="tnum inline-flex min-w-[1.5rem] items-center justify-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 font-mono text-[12px] font-semibold text-primary ring-1 ring-inset ring-primary/20"
+                    >
+                      <Send className="h-3 w-3" aria-hidden />
+                      {r.emails_sent}
+                    </span>
+                  ) : (
+                    <Dash />
+                  )}
+                </TableCell>
+                <TableCell className="tnum text-right font-mono text-[14px] text-foreground">
                   {r.rating != null && r.rating !== "" ? r.rating : <Dash />}
                 </TableCell>
-                <TableCell className="tnum text-right font-mono text-[12px] text-foreground">
+                <TableCell className="tnum text-right font-mono text-[14px] text-foreground">
                   {r.emails?.length || <Dash />}
                 </TableCell>
-                <TableCell className="tnum text-right font-mono text-[12px] text-foreground">
+                <TableCell className="tnum text-right font-mono text-[14px] text-foreground">
                   {r.social_medias?.length || <Dash />}
                 </TableCell>
                 {onView && (
@@ -249,7 +265,7 @@ export function LeadsTableView({
                       onClick={() => onView(r)}
                       data-track="lead_view"
                       data-track-lead={r.id}
-                      className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                      className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[13px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
                     >
                       <Eye className="h-3.5 w-3.5" aria-hidden />
                       View

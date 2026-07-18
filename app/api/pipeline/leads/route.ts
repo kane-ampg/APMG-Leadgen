@@ -6,6 +6,7 @@ import {
   supabaseTarget,
   UNGROUPED,
 } from "@/lib/pipeline/server";
+import { countEmailsSentByLead } from "@/lib/portal/server";
 
 // Reads back (GET) and deletes (DELETE) stored leads for the Pipeline view.
 // Server-side (keeps the service role key off the browser).
@@ -115,7 +116,18 @@ export async function GET(req: Request): Promise<Response> {
   const fromHeader = range.includes("/") ? Number(range.split("/")[1]) : NaN;
   const total = Number.isFinite(fromHeader) ? fromHeader : Array.isArray(rows) ? rows.length : 0;
 
-  return Response.json({ ok: true, mode: "live", rows: Array.isArray(rows) ? rows : [], total });
+  // Enrich each lead with how many outreach emails it has been sent (from the
+  // email_sent ledger in portal_events). Best-effort: a failed/absent tally
+  // just leaves the count at 0, never fails the leads read.
+  const list = Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+  const ids = list.map((r) => (typeof r.id === "string" ? r.id : "")).filter(Boolean);
+  const sentByLead = await countEmailsSentByLead(target.base, target.key, ids);
+  for (const r of list) {
+    const id = typeof r.id === "string" ? r.id : "";
+    r.emails_sent = id ? sentByLead.get(id) ?? 0 : 0;
+  }
+
+  return Response.json({ ok: true, mode: "live", rows: list, total });
 }
 
 /**

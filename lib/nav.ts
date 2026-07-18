@@ -6,9 +6,7 @@ import {
   HardHat,
   Inbox,
   LayoutDashboard,
-  Megaphone,
   PhoneCall,
-  Radio,
   ScrollText,
   Settings,
   Sparkles,
@@ -24,8 +22,6 @@ export type TabId =
   | "pipeline"
   | "leads"
   | "enquiries"
-  | "sources"
-  | "campaigns"
   | "sales"
   | "closed"
   | "integrations"
@@ -63,8 +59,7 @@ export const NAV: NavSection[] = [
       { id: "pipeline", label: "Pipeline", icon: Filter, perm: "pipeline.view" },
       { id: "leads", label: "Leads", icon: Users, perm: "leads.view" },
       { id: "enquiries", label: "Enquiries", icon: Inbox, perm: "enquiries.view" },
-      { id: "sources", label: "Sources", icon: Radio, badge: "6", perm: "sources.view" },
-      { id: "campaigns", label: "Campaigns", icon: Megaphone, badge: "4", perm: "campaigns.view" },
+      { id: "telemetry", label: "Telemetry", icon: Activity, perm: "telemetry.view" },
     ],
   },
   {
@@ -86,7 +81,6 @@ export const NAV: NavSection[] = [
     caption: "System",
     items: [
       { id: "legal", label: "Legal Documents", icon: ScrollText, perm: "legal.view" },
-      { id: "telemetry", label: "Telemetry", icon: Activity, perm: "telemetry.view" },
       { id: "settings", label: "Settings", icon: Settings, perm: "settings.view" },
     ],
   },
@@ -113,8 +107,6 @@ export const TAB_LABEL: Record<TabId, string> = {
   pipeline: "Pipeline",
   leads: "Leads",
   enquiries: "Enquiries",
-  sources: "Sources",
-  campaigns: "Campaigns",
   sales: "Sales",
   closed: "Closed deals",
   integrations: "Integrations",

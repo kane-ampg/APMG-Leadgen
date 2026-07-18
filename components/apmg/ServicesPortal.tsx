@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
+import Image, { type StaticImageData } from "next/image";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowRight,
@@ -24,6 +24,17 @@ import { cn } from "@/lib/cn";
 import heroBg from "@/app/apmgbg.jpg";
 import heroTeam from "@/app/apmgteam.jpg";
 import brandLogo from "@/app/icon.png";
+// Card backgrounds — real APMG job-site photos, self-hosted in the repo
+// (app/services/*, mirroring app/team/*) and static-imported so Next optimises
+// them and hands us a blur placeholder. Keyed to each service slug below.
+import photoElectrical from "@/app/services/electrical.png";
+import photoPainting from "@/app/services/painting.png";
+import photoPlumbing from "@/app/services/plumbing.png";
+import photoCarpentry from "@/app/services/carpentry.png";
+import photoFlooring from "@/app/services/flooring.png";
+import photoGardening from "@/app/services/gardening.png";
+import photoHandyman from "@/app/services/handyman.png";
+import photoMakeSafe from "@/app/services/make-safe.png";
 import { track } from "@/lib/telemetry";
 import { Reveal } from "./Reveal";
 import { Footer } from "./Footer";
@@ -94,6 +105,9 @@ interface Service {
   name: string;
   blurb: string;
   icon: LucideIcon;
+  /** Card banner — a real APMG job-site photo. Optional so the pseudo-service
+   *  (GENERAL_SERVICE) and the modal, which share this shape, need not carry one. */
+  photo?: StaticImageData;
 }
 
 /**
@@ -115,48 +129,56 @@ const SERVICES: Service[] = [
     name: "Electrical Services",
     blurb: "Safe, certified electrical work — from new power points to full rewires.",
     icon: Zap,
+    photo: photoElectrical,
   },
   {
     slug: "painting",
     name: "Painting Services",
     blurb: "Fresh, flawless finishes inside and out, applied with real care.",
     icon: Paintbrush,
+    photo: photoPainting,
   },
   {
     slug: "plumbing",
     name: "Plumbing Services",
     blurb: "Leaks, installs and emergencies sorted fast — and right the first time.",
     icon: Droplets,
+    photo: photoPlumbing,
   },
   {
     slug: "carpentry",
     name: "Carpentry & Joinery",
     blurb: "Custom-built and expertly repaired timberwork, made to last.",
     icon: Hammer,
+    photo: photoCarpentry,
   },
   {
     slug: "flooring",
     name: "Flooring Services",
     blurb: "Timber, tile, vinyl and carpet — laid to perfection.",
     icon: Layers,
+    photo: photoFlooring,
   },
   {
     slug: "gardening",
     name: "Gardening & Grounds Maintenance",
     blurb: "Lawns, gardens and grounds kept looking their very best.",
     icon: Sprout,
+    photo: photoGardening,
   },
   {
     slug: "handyman",
     name: "Handyman Services",
     blurb: "The odd jobs and quick fixes — all handled in a single call.",
     icon: Wrench,
+    photo: photoHandyman,
   },
   {
     slug: "make-safe",
     name: "Property Make Safe Services",
     blurb: "Rapid make-safe and securing after storm damage or a break-in.",
     icon: ShieldCheck,
+    photo: photoMakeSafe,
   },
 ];
 
@@ -493,6 +515,13 @@ function ServiceCard({
   // the page (and in our data) instead of bouncing them to a mail client.
   // `w-full text-left` compensates for the button's native shrink-to-fit
   // sizing and centred text so the card renders exactly as the <a> did.
+  //
+  // Layout: a real APMG job-site PHOTO banner on top (the trust surface — these
+  // are our actual crew in branded workwear), then the text block below on the
+  // solid card so copy stays fully legible. The category icon sits in a chip
+  // that overlaps the banner's lower-left edge, tying photo to text and keeping
+  // its role as a quick visual key. overflow-hidden clips the photo to the
+  // card's rounded corners.
   return (
     <motion.button
       type="button"
@@ -501,23 +530,53 @@ function ServiceCard({
       data-track-service={service.slug}
       whileHover={reduce ? undefined : { y: -1 }}
       transition={{ type: "spring", stiffness: 320, damping: 24 }}
-      className="group relative flex h-full w-full flex-col gap-3 rounded-xl bg-card p-4 text-left ring-1 ring-foreground/10 transition-colors hover:ring-primary/40"
+      className="group relative flex h-full w-full flex-col overflow-hidden rounded-xl bg-card text-left ring-1 ring-foreground/10 transition-colors hover:ring-primary/40"
     >
-      <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-accent text-primary ring-1 ring-primary/15">
-        <Icon className="h-5 w-5" aria-hidden />
-      </span>
-      <div className="flex-1">
-        <h3 className="font-heading text-sm font-semibold leading-snug text-foreground">
-          {service.name}
-        </h3>
-        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-          {service.blurb}
-        </p>
+      {/* Photo banner. Fixed 16:9 box so every card's image reads at the same
+          height regardless of the source photo. object-CONTAIN shows the WHOLE
+          photo uncropped — nothing is cut off — with the box's bg-muted acting
+          as a matte wherever a photo's ratio doesn't exactly fill 16:9 (same
+          letterbox approach the hero uses). The subtle zoom on hover echoes the
+          card lift; a faint bottom gradient seats the overlapping icon chip. */}
+      <div className="relative aspect-video w-full overflow-hidden bg-muted">
+        {service.photo ? (
+          <Image
+            src={service.photo}
+            alt=""
+            fill
+            placeholder="blur"
+            sizes="(min-width: 1024px) 25vw, (min-width: 640px) 50vw, 100vw"
+            className={cn(
+              "object-contain object-center",
+              !reduce && "transition-transform duration-500 group-hover:scale-105",
+            )}
+          />
+        ) : null}
+        <span
+          aria-hidden
+          className="absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-black/45 to-transparent"
+        />
       </div>
-      <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground transition-colors group-hover:text-primary">
-        Enquire
-        <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" aria-hidden />
-      </span>
+
+      {/* Text block on the solid card. -mt-6 pulls the icon chip up so it
+          straddles the banner edge; pt keeps the heading clear of it. */}
+      <div className="relative flex flex-1 flex-col gap-3 p-4">
+        <span className="-mt-11 flex h-11 w-11 items-center justify-center rounded-lg bg-accent text-primary shadow-sm ring-1 ring-primary/15">
+          <Icon className="h-5 w-5" aria-hidden />
+        </span>
+        <div className="flex-1">
+          <h3 className="font-heading text-sm font-semibold leading-snug text-foreground">
+            {service.name}
+          </h3>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+            {service.blurb}
+          </p>
+        </div>
+        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground transition-colors group-hover:text-primary">
+          Enquire
+          <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" aria-hidden />
+        </span>
+      </div>
     </motion.button>
   );
 }

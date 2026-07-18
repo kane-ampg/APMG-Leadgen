@@ -1,4 +1,5 @@
 import {
+  COMPOSE_RATE,
   demoDraft,
   ensureLinkToken,
   isEmail,
@@ -164,17 +165,42 @@ export async function POST(req: Request): Promise<Response> {
     return kb;
   };
 
-  // Draft through a small worker pool. Two workers, not more: the org's API
-  // tier rate-limits requests/minute, so wider pools just burn every call on
-  // 429s (observed live: 5 workers → half the batch falling back to the
-  // template). Two keeps a call in flight while the other backs off, and
-  // same-sector leads still hit the cached KB system prefix after the first
-  // round. Results keep the input order.
-  const CONCURRENCY = 2;
+  // Draft through a small worker pool paced under a hard requests/minute
+  // ceiling (COMPOSE_RATE — the ONE knob to open up after raising the Console
+  // tier). Two layers of guard rail:
+  //   1. CONCURRENCY workers, so a slow/backing-off call can't let the others
+  //      race ahead. Kept low because wider pools just burn calls on 429s
+  //      (observed live: 5 workers → half the batch falling back to template).
+  //   2. A server-side rate gate: every call start is spaced by at least
+  //      MIN_INTERVAL_MS via a shared "next allowed start" cursor, so the route
+  //      provably never exceeds RPM no matter how fast calls return. This is
+  //      the actual rate-limit guarantee; the SDK's per-request retries
+  //      (composeEmail.ts) stay as a backstop for anything that still slips.
+  // Same-sector leads still hit the cached KB system prefix after round one.
+  // Results keep the input order.
+  const CONCURRENCY = COMPOSE_RATE.CONCURRENCY;
   const results: ComposeDraft[] = new Array<ComposeDraft>(leads.length);
   let drafted = 0;
+  let throttledMs = 0; // total wall-clock this run spent waiting on the gate
   let cursor = 0;
   const startedAt = Date.now();
+
+  // Rate gate: monotonic timestamp of the earliest moment the next call may
+  // start. Each worker claims its slot by advancing this before it awaits, so
+  // the two workers can't both fire in the same instant — starts are serialized
+  // to one per MIN_INTERVAL_MS across the whole pool.
+  let nextSlot = startedAt;
+  const rateGate = async (): Promise<void> => {
+    const now = Date.now();
+    const slot = Math.max(now, nextSlot);
+    nextSlot = slot + COMPOSE_RATE.MIN_INTERVAL_MS;
+    const wait = slot - now;
+    if (wait > 0) {
+      throttledMs += wait;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  };
+
   const worker = async (): Promise<void> => {
     for (;;) {
       const i = cursor++;
@@ -182,6 +208,15 @@ export async function POST(req: Request): Promise<Response> {
       const lead = leads[i];
       // Out of wall-clock budget — template-fill the rest instantly so the
       // response beats the platform kill instead of 504ing the whole batch.
+      // Checked before the gate so a backed-up gate queue drains to templates
+      // rather than pushing the function past the deadline.
+      if (SOFT_DEADLINE_MS - (Date.now() - startedAt) <= 0) {
+        results[i] = demoDraft(lead);
+        continue;
+      }
+      // Pace this call under the RPM ceiling before spending any budget on it.
+      await rateGate();
+      // Re-check the deadline: the gate may have made us wait.
       const remaining = SOFT_DEADLINE_MS - (Date.now() - startedAt);
       if (remaining <= 0) {
         results[i] = demoDraft(lead);
@@ -202,6 +237,12 @@ export async function POST(req: Request): Promise<Response> {
     }
   };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, leads.length) }, worker));
+  if (throttledMs > 0) {
+    console.info(
+      `[compose] paced ${leads.length} leads under ${COMPOSE_RATE.RPM} RPM; ` +
+        `${Math.round(throttledMs / 1000)}s spent waiting on the rate gate.`,
+    );
+  }
 
   // Key set but every draft fell back to the template (bad key, outage, all
   // refusals) → report demo, so the UI flags "demo drafts" instead of passing

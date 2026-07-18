@@ -215,6 +215,32 @@ export function htmlToText(html: string): string {
  * route substitutes the tracked URL per recipient.
  */
 
+/**
+ * Rate-limit guard rail for AI drafting. Each lead is one Claude call to Opus,
+ * and Anthropic rate-limits requests/minute per account tier — a campaign that
+ * fires faster than the tier allows trips 429s and (after retries) silently
+ * ships those leads as the deterministic template. This is the single ceiling
+ * the compose route paces itself under so that can't happen:
+ *
+ *   RPM  — max Claude calls started per rolling minute. Set to ~70% of the
+ *          account's Opus requests-per-minute (Console → Settings → Limits),
+ *          leaving headroom for SDK retries and any other traffic on the key.
+ *          After raising the tier in the Console, raise this ONE number.
+ *   CONCURRENCY — in-flight calls at once. Kept low so a slow/backing-off call
+ *          doesn't let the others race ahead of the RPM budget.
+ *
+ * MIN_INTERVAL_MS (derived) is the minimum spacing between call starts the
+ * route enforces server-side — the actual guarantee (see the compose route),
+ * not something the client is trusted to honour.
+ */
+export const COMPOSE_RATE = {
+  RPM: 20,
+  CONCURRENCY: 2,
+  get MIN_INTERVAL_MS(): number {
+    return Math.ceil(60_000 / this.RPM);
+  },
+} as const;
+
 /** Hard cap on leads per compose run — each lead costs one Claude call, and
  *  the org's API tier only allows a few requests/minute, so big batches take
  *  minutes regardless of pool width. The client submits a run as

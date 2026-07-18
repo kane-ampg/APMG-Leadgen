@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   Activity,
   AlertTriangle,
+  CheckCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -38,10 +39,12 @@ import {
   type LeadEventKind,
 } from "@/lib/data/leadActivity";
 import {
+  ackAllLeadActivity,
   ackLeadActivity,
   forgetLeadActivity,
   ingestLeadActivity,
   useLeadActivityUnseenByLead,
+  useLeadActivityUnseenTotal,
 } from "@/lib/data/leadActivityNotifications";
 import { formatInt } from "@/lib/format";
 import { adminHeaders, saveAdminKey } from "@/lib/portal/adminKey";
@@ -97,6 +100,89 @@ const POLL_MS = 10000;
 
 /** Lead-activity list page size — the panel paginates past this. */
 const PAGE_SIZE = 25;
+
+/* ───────────────────────────  interest filtering  ─────────────────────────── */
+
+/**
+ * How the Lead activity list is ordered — "where the most interest lies". The
+ * default stays "recent" (the live API already sorts lastSeen-desc), but an
+ * operator hunting the hottest leads can re-rank by raw engagement (event
+ * count) or push the money events (enquiries, then service opens) to the top.
+ */
+type SortKey = "recent" | "engaged" | "enquired";
+
+const SORTS: { id: SortKey; label: string }[] = [
+  { id: "recent", label: "Latest" },
+  { id: "engaged", label: "Most active" },
+  { id: "enquired", label: "Hottest" },
+];
+
+/** Visible (non-hidden) event count — the "how active" measure the list ranks
+ *  and filters on, matching the number the row itself shows. */
+function activeEventCount(lead: LeadActivity): number {
+  return lead.events.reduce((n, e) => n + (isHiddenEvent(e.event) ? 0 : 1), 0);
+}
+
+/* ───────────────────────────  lead score  ─────────────────────────── */
+
+/**
+ * Intent score (0–100) per lead — a single readout of "how hot is this lead".
+ * The rule the operator asked for: an ENQUIRY is always the best score. So the
+ * funnel is banded, not additive — reaching a deeper stage sets a floor no
+ * amount of shallower activity can beat:
+ *
+ *   enquired      → 90–100  (money event; the enquiry itself is worth ~1 lead)
+ *   opened a svc  → 60–89   (strong intent — looked at what we sell)
+ *   reached portal→ 35–59   (clicked through and browsed)
+ *   just clicked  → 10–34   (opened the email link, went no further)
+ *
+ * Inside each band, repeat activity nudges the number up (capped to the band)
+ * so two enquiries out-score one, ten service opens out-score two — but a
+ * browser can never overtake an enquirer. Fully deterministic (no time decay)
+ * so the same trail always scores the same, and the number matches the trail
+ * the operator can count by eye.
+ */
+function leadScore(lead: LeadActivity): number {
+  const { inquiries, serviceOpens, portalViews, emailClicks } = lead.counts;
+  // ramp: how far a count fills its band, saturating so extras keep adding but
+  // with diminishing return (1→~0.3, 3→~0.6, 6→~0.8, big→~1).
+  const ramp = (n: number, k: number) => (n <= 0 ? 0 : 1 - Math.exp(-n / k));
+  if (inquiries > 0) return Math.round(90 + 10 * ramp(inquiries, 2));
+  if (serviceOpens > 0) return Math.round(60 + 29 * ramp(serviceOpens, 4));
+  if (portalViews > 0) return Math.round(35 + 24 * ramp(portalViews, 4));
+  if (emailClicks > 0) return Math.round(10 + 24 * ramp(emailClicks, 4));
+  return 0;
+}
+
+type ScoreTier = { label: string; chip: string; ring: string };
+
+/** Which band a score sits in → its label + tone. The enquiry band is the
+ *  loudest thing on the row (solid signal red), matching the "Enquired" pill
+ *  and enquiry trail chip so the hottest leads read the same everywhere. */
+function scoreTier(score: number): ScoreTier {
+  if (score >= 90)
+    return {
+      label: "Hottest",
+      chip: "border-transparent bg-primary-solid text-primary-foreground",
+      ring: "text-primary-foreground/80",
+    };
+  if (score >= 60)
+    return { label: "Hot", chip: "border-primary/40 bg-primary/10 text-primary", ring: "text-primary/70" };
+  if (score >= 35)
+    return {
+      label: "Warm",
+      chip: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+      ring: "text-amber-500/70",
+    };
+  return {
+    label: "Cool",
+    chip: "border-border bg-background text-muted-foreground",
+    ring: "text-muted-foreground/60",
+  };
+}
+
+/** Sentinel for the "all sectors" chip (no `category` filter applied). */
+const ALL_SECTORS = "__all__";
 
 /* ───────────────────────────  load state  ─────────────────────────── */
 
@@ -453,7 +539,8 @@ const LeadRow = memo(function LeadRow({
   // count) so the numbers a user can verify by counting chips always agree.
   const visible = useMemo(() => lead.events.filter((e) => !isHiddenEvent(e.event)), [lead.events]);
   const name = leadDisplayName(lead);
-  const enquired = lead.counts.inquiries > 0;
+  const score = leadScore(lead);
+  const tier = scoreTier(score);
 
   return (
     <li className="border-t border-border/70 first:border-t-0">
@@ -471,7 +558,7 @@ const LeadRow = memo(function LeadRow({
           aria-expanded={open}
           data-track="telemetry_lead_toggle"
           data-track-lead={lead.leadId}
-          aria-label={`${name}: ${visible.length} ${visible.length === 1 ? "event" : "events"}${unseen > 0 ? ` (${unseen} new)` : ""}, last seen ${fmtWhen(lead.lastSeen)}. ${open ? "Collapse" : "Expand"} timeline`}
+          aria-label={`${name}: intent score ${score} of 100, ${tier.label}. ${visible.length} ${visible.length === 1 ? "event" : "events"}${unseen > 0 ? ` (${unseen} new)` : ""}, last seen ${fmtWhen(lead.lastSeen)}. ${open ? "Collapse" : "Expand"} timeline`}
           className="flex min-w-0 flex-1 flex-col gap-2.5 px-4 py-3.5 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))] md:grid md:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_auto] md:items-center md:gap-3"
         >
           {/* identity: business + sector/campaign chips */}
@@ -493,11 +580,20 @@ const LeadRow = memo(function LeadRow({
               >
                 {name}
               </span>
-              {enquired && (
-                <span className="inline-flex shrink-0 items-center rounded-full bg-primary-solid px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.08em] text-primary-foreground">
-                  Enquired
+              {/* intent score — the hotter the lead the louder the chip; an
+                  enquiry always lands in the top (Hottest) band. */}
+              <span
+                title={`Intent score ${score}/100 · ${tier.label}`}
+                className={cn(
+                  "inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[9px] font-semibold uppercase tracking-[0.08em]",
+                  tier.chip,
+                )}
+              >
+                <span className="tnum">{score}</span>
+                <span className={cn("font-medium normal-case tracking-normal", tier.ring)}>
+                  {tier.label}
                 </span>
-              )}
+              </span>
             </span>
             <span className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5">
               {lead.category && (
@@ -761,8 +857,15 @@ export function TelemetryPage() {
    *  clamps it, so a shrinking list (deletes, refetch) can't strand the view
    *  on a page that no longer exists. */
   const [page, setPage] = useState(0);
+  /** How the list is ranked — the "where's the interest" control. */
+  const [sort, setSort] = useState<SortKey>("recent");
+  /** Sector narrowing (a lead `category`, or ALL_SECTORS for no filter). */
+  const [sector, setSector] = useState<string>(ALL_SECTORS);
   /** Per-lead NEW (unacknowledged) event counts — the blinking row dots. */
   const unseenByLead = useLeadActivityUnseenByLead();
+  /** Total unseen customer events — drives the nav badge; here it gates (and
+   *  labels) the "Clear notifications" button. */
+  const unseenTotal = useLeadActivityUnseenTotal();
   /** True while a MANUAL refresh is in flight — the page stays "ready" during
    *  one, so the button needs its own flag to spin (feedback that the click
    *  landed even when the data comes back unchanged). */
@@ -1040,14 +1143,44 @@ export function TelemetryPage() {
     [leads],
   );
 
-  // Latest activity always on top: the live API sorts lastSeen-desc already,
-  // but the demo preset (and any payload drift) shouldn't be trusted to —
-  // uniform ISO-8601 UTC stamps make the string compare a correct time order.
-  const sortedLeads = useMemo(
-    () =>
-      [...leads].sort((a, b) => (a.lastSeen < b.lastSeen ? 1 : a.lastSeen > b.lastSeen ? -1 : 0)),
-    [leads],
-  );
+  // The sectors present in the current data — the sector-filter chips are
+  // built from what's actually here (never a fixed list that offers empty
+  // filters), most-active sector first so the busiest bucket leads.
+  const sectors = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const l of leads) {
+      if (l.category) counts.set(l.category, (counts.get(l.category) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
+  }, [leads]);
+
+  // A sector that stops existing after a refetch/delete must not strand the
+  // list on an empty filter — fall back to "all" when the pick disappears.
+  const activeSector = sector !== ALL_SECTORS && sectors.includes(sector) ? sector : ALL_SECTORS;
+
+  // Filter (by sector) then rank (by the interest control). Time order is the
+  // stable tie-breaker under every sort — uniform ISO-8601 UTC stamps make the
+  // string compare a correct time order, and the live API already sorts
+  // lastSeen-desc, but the demo preset (and payload drift) shouldn't be trusted
+  // to, so "recent" re-sorts explicitly too.
+  const sortedLeads = useMemo(() => {
+    const byRecency = (a: LeadActivity, b: LeadActivity) =>
+      a.lastSeen < b.lastSeen ? 1 : a.lastSeen > b.lastSeen ? -1 : 0;
+    const filtered =
+      activeSector === ALL_SECTORS ? leads : leads.filter((l) => l.category === activeSector);
+    const ranked = [...filtered];
+    if (sort === "engaged") {
+      ranked.sort((a, b) => activeEventCount(b) - activeEventCount(a) || byRecency(a, b));
+    } else if (sort === "enquired") {
+      // Straight by intent score — same number the row badge shows, so the top
+      // of "Hottest" is exactly the highest-scoring lead (enquirers first,
+      // since an enquiry always lands in the top band). Recency breaks ties.
+      ranked.sort((a, b) => leadScore(b) - leadScore(a) || byRecency(a, b));
+    } else {
+      ranked.sort(byRecency);
+    }
+    return ranked;
+  }, [leads, activeSector, sort]);
   const pageCount = Math.max(1, Math.ceil(sortedLeads.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pagedLeads = useMemo(
@@ -1055,7 +1188,18 @@ export function TelemetryPage() {
     [sortedLeads, safePage],
   );
 
-  const lastSignal = sortedLeads[0]?.lastSeen ?? null;
+  // Changing the sort or sector re-frames the list — jump back to its first
+  // page so the top of the new ranking is what's on screen.
+  useEffect(() => {
+    setPage(0);
+  }, [sort, activeSector]);
+
+  // "Last signal" is the freshest lead overall, independent of the current
+  // ranking/filter, so it stays a true clock even under "Hottest" or a sector.
+  const lastSignal = useMemo(
+    () => leads.reduce<string | null>((max, l) => (!max || l.lastSeen > max ? l.lastSeen : max), null),
+    [leads],
+  );
 
   return (
     <div className="flex min-h-full flex-col px-4 py-5 sm:px-6">
@@ -1080,6 +1224,22 @@ export function TelemetryPage() {
                 {lastSignal ? fmtWhen(lastSignal) : "—"}
               </div>
             </div>
+            {/* Clear notifications — acknowledges EVERY lead at once, so the nav
+                badge and all row dots fall away together (the bulk equivalent of
+                expanding each row). Only present when there's something unseen;
+                carries the signal-red accent that means "new activity" app-wide. */}
+            {unseenTotal > 0 && (
+              <button
+                type="button"
+                onClick={() => ackAllLeadActivity()}
+                data-track="telemetry_clear_notifications"
+                aria-label={`Clear ${formatInt(unseenTotal)} new-activity ${unseenTotal === 1 ? "notification" : "notifications"}`}
+                className="inline-flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/5 px-2.5 py-1.5 text-[11px] font-medium text-primary transition-colors hover:bg-primary/10"
+              >
+                <CheckCheck className="h-3.5 w-3.5" aria-hidden />
+                Clear <span className="tnum">{formatInt(unseenTotal)}</span>
+              </button>
+            )}
             <TelemetryReportExport demo={ready?.mode === "demo"} />
             <button
               type="button"
@@ -1202,17 +1362,93 @@ export function TelemetryPage() {
                   meta={
                     <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                       {ready
-                        ? `${formatInt(leads.length)} ${leads.length === 1 ? "lead" : "leads"} · ${formatInt(totalEvents)} events`
+                        ? activeSector === ALL_SECTORS
+                          ? `${formatInt(leads.length)} ${leads.length === 1 ? "lead" : "leads"} · ${formatInt(totalEvents)} events`
+                          : `${formatInt(sortedLeads.length)} of ${formatInt(leads.length)} ${leads.length === 1 ? "lead" : "leads"}`
                         : "loading"}
                     </span>
                   }
                 />
+                {/* interest controls: rank by engagement + narrow by sector, so
+                    the operator can steer the list to where the interest is.
+                    Sort is a segmented control (few, fixed options); Sector is a
+                    dropdown (open-ended — grows with the sectors in the data). */}
+                {ready && leads.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 border-b border-border px-4 py-2.5">
+                    <div
+                      className="flex flex-wrap items-center gap-1.5"
+                      role="group"
+                      aria-label="Sort lead activity"
+                    >
+                      <span className="mr-0.5 font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground">
+                        Sort
+                      </span>
+                      {SORTS.map((s) => (
+                        <button
+                          key={s.id}
+                          type="button"
+                          data-track="telemetry_sort"
+                          data-track-sort={s.id}
+                          onClick={() => setSort(s.id)}
+                          aria-pressed={sort === s.id}
+                          className={cn(
+                            "rounded-md border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.1em] transition-colors",
+                            sort === s.id
+                              ? "border-primary/40 bg-primary/10 text-foreground"
+                              : "border-border bg-background text-muted-foreground hover:text-foreground",
+                          )}
+                        >
+                          {s.label}
+                        </button>
+                      ))}
+                    </div>
+                    {sectors.length > 1 && (
+                      <div className="flex items-center gap-1.5">
+                        <label
+                          htmlFor="telemetry-sector"
+                          className="font-mono text-[9.5px] uppercase tracking-[0.14em] text-muted-foreground"
+                        >
+                          Sector
+                        </label>
+                        {/* Native <select> — a real dropdown that stays tidy no
+                            matter how many sectors the data grows to; the caret
+                            is the app's own ChevronDown behind the control. */}
+                        <div className="relative">
+                          <select
+                            id="telemetry-sector"
+                            value={activeSector}
+                            onChange={(e) => setSector(e.target.value)}
+                            data-track="telemetry_sector"
+                            aria-label="Filter lead activity by sector"
+                            className="h-7 max-w-[13rem] cursor-pointer appearance-none truncate rounded-md border border-border bg-background py-0 pl-2.5 pr-7 text-[11px] font-medium text-foreground outline-none transition-colors hover:border-primary/40 focus-visible:ring-2 focus-visible:ring-ring"
+                          >
+                            <option value={ALL_SECTORS}>All sectors</option>
+                            {sectors.map((s) => (
+                              <option key={s} value={s}>
+                                {s}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown
+                            className="pointer-events-none absolute right-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                            aria-hidden
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {!ready ? (
                   <LeadListSkeleton />
                 ) : leads.length === 0 ? (
                   <PanelEmpty
                     icon={MousePointerClick}
                     hint="No attributed clicks yet — trails appear the moment a lead opens a tracked outreach email."
+                  />
+                ) : sortedLeads.length === 0 ? (
+                  <PanelEmpty
+                    icon={MousePointerClick}
+                    hint="No leads in this sector — clear the filter to see every attributed trail."
                   />
                 ) : (
                   <>

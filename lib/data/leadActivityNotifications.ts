@@ -245,6 +245,28 @@ export function ackLeadActivity(leadId: string, lastSeenHint?: string) {
   recompute();
 }
 
+/** Acknowledge EVERY known lead at once — the "clear notifications" action.
+ *  Advances each watermark to that lead's newest activity so the nav badge and
+ *  all row dots fall away together. No-op (and no re-render) when nothing is
+ *  actually unseen. */
+export function ackAllLeadActivity() {
+  if (typeof window === "undefined") return;
+  loadAcks();
+  let changed = false;
+  for (const lead of latest) {
+    const known = lead.lastSeen || lead.events[lead.events.length - 1]?.ts;
+    if (!known) continue;
+    // Only advance forward — never rewind a watermark already ahead of lastSeen.
+    if (ms(known) > ms(acks[lead.leadId])) {
+      acks[lead.leadId] = known;
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  persistAcks();
+  recompute();
+}
+
 /** A lead's activity was deleted — drop it from the feed and the watermarks. */
 export function forgetLeadActivity(leadId: string) {
   if (typeof window === "undefined") return;

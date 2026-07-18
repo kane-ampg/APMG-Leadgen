@@ -289,6 +289,63 @@ export function isMissingPortalTable(status: number, detail: string): boolean {
   return status === 404 || /find the table|PGRST205/i.test(detail);
 }
 
+/** The send-ledger event name (portal_events). Kept in sync with
+ *  /api/pipeline/campaigns/send, which writes one row per delivered recipient. */
+const SENT_EVENT = "email_sent";
+
+/**
+ * Count how many outreach emails have been sent to each of the given leads, by
+ * tallying the `email_sent` ledger rows in portal_events (one row per delivered
+ * recipient — see /api/pipeline/campaigns/send). Returns a leadId → count map;
+ * leads with no sends are simply absent (treat as 0). Degrades to an EMPTY map
+ * on any error / missing table — the count is a nice-to-have column and must
+ * never fail the leads read. Only well-formed uuids are queried (the ids get
+ * interpolated into a PostgREST filter).
+ */
+export async function countEmailsSentByLead(
+  base: string,
+  key: string,
+  leadIds: string[],
+): Promise<Map<string, number>> {
+  const ids = [...new Set(leadIds.filter(isUuid))];
+  const counts = new Map<string, number>();
+  if (ids.length === 0) return counts;
+  // Chunk the id list so a large folder doesn't build an over-long request URL.
+  const CHUNK = 200;
+  try {
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      // Fetch just the lead_id of every email_sent row for these leads, then
+      // tally client-side (PostgREST has no plain GROUP BY over REST). One row
+      // per send, scoped to the ids on screen.
+      const inList = chunk.join(",");
+      const res = await fetch(
+        `${base}/rest/v1/portal_events?select=lead_id&event=eq.${SENT_EVENT}&lead_id=in.(${inList})`,
+        { headers: { apikey: key, Authorization: `Bearer ${key}` }, cache: "no-store" },
+      );
+      if (!res.ok) {
+        const detail = await res.text().catch(() => "");
+        if (!isMissingPortalTable(res.status, detail)) {
+          console.error(`[portal] email_sent tally ${res.status}:`, detail.slice(0, 300));
+        }
+        // A missing table (or any error) → give up on the whole tally; the
+        // column just renders as "not sent" everywhere.
+        return new Map();
+      }
+      const rows = (await res.json().catch(() => [])) as Array<{ lead_id?: unknown }>;
+      for (const r of rows) {
+        if (typeof r.lead_id === "string") {
+          counts.set(r.lead_id, (counts.get(r.lead_id) ?? 0) + 1);
+        }
+      }
+    }
+    return counts;
+  } catch (e) {
+    console.error("[portal] email_sent tally failed:", e);
+    return new Map();
+  }
+}
+
 /* ── Email suppression / unsubscribe (supabase/unsubscribe.sql) ─────────────
    Keyed by lowercased email so an opt-out survives lead re-imports. The
    unsubscribe endpoint records rows; the send route filters against them so we

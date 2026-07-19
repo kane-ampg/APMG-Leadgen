@@ -39,6 +39,7 @@ import { track } from "@/lib/telemetry";
 import { Reveal } from "./Reveal";
 import { Footer } from "./Footer";
 import { PortalUnsubscribe } from "./PortalUnsubscribe";
+import { PortalChat } from "./PortalChat";
 import { ServiceInquiryModal } from "./ServiceInquiryModal";
 import { TeamSection } from "./TeamSection";
 
@@ -372,6 +373,12 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
           no address in the URL (unlike the email footer link), so this collects
           it and hands off to the same /api/portal/unsubscribe route. */}
       {standalone && <PortalUnsubscribe />}
+
+      {/* KB-grounded chat bubble — customer host only. Auto-opens ~3s after the
+          visitor lands from an outreach link; spends a walled-off key behind a
+          rate-limited, KB-only endpoint (see app/api/portal/chat). Never mounted
+          inside the internal "Our Services" tab. */}
+      {standalone && <PortalChat />}
 
       {/* Single modal instance shared by every card + CTA on the page. The
           consent gate + funnel event only apply on the customer host. */}

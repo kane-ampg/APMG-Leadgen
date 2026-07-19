@@ -171,6 +171,36 @@ export function isInternalRequest(req: NextRequest | Request): boolean {
   return false;
 }
 
+/**
+ * NON-HUMAN TRAFFIC IS NOT LEAD ACTIVITY. Outreach emails are auto-scanned
+ * before the recipient ever sees them: Microsoft Defender / Safe Links, Google,
+ * Barracuda, Proofpoint and friends fetch every link in a message to sandbox it
+ * — so a tracked /t/ link (and the portal page it lands on) gets hit by a bot
+ * seconds after send, with no human involved. Recording those as
+ * `attribution_click` / `portal_view` falsely flips the lead's "Engaged" badge
+ * and lights the Telemetry trail for a click that never happened. It also
+ * catches scripted probes (curl, python-requests, headless crawlers) and the
+ * scanners' own agent strings. Matched on User-Agent — coarse but exactly the
+ * signal these clients advertise, and the same fingerprint that identified the
+ * junk rows we purged from portal_events.
+ *
+ * Conservative by construction: it matches only unmistakable non-browser /
+ * scanner agents, so a real Chrome/Safari/Edge/Firefox click is never dropped.
+ * A missing UA is treated as a bot too — every real browser sends one, and the
+ * only clients that omit it here were scripted.
+ */
+const BOT_UA_RE =
+  /bot|crawl|spider|slurp|scan(?:ner)?|probe|preview|fetch|monitor|curl|wget|python-requests|python-urllib|okhttp|axios|node-fetch|libwww|httpclient|java\/|go-http|ruby|headless|phantom|puppeteer|playwright|selenium|lighthouse|facebookexternalhit|whatsapp|telegrambot|slackbot|discordbot|bingpreview|proofpoint|barracuda|mimecast|safelinks|microsoft|defender|forcepoint|symantec|cloudmark|antispam/i;
+
+/** True when the request's User-Agent looks like a bot / link-scanner / script
+ *  rather than a human's browser (see BOT_UA_RE). The telemetry writers skip
+ *  these so automated link-fetching can never masquerade as a real prospect. */
+export function isBotRequest(req: NextRequest | Request): boolean {
+  const ua = req.headers.get("user-agent");
+  if (!ua || !ua.trim()) return true; // no UA at all → scripted, never a browser
+  return BOT_UA_RE.test(ua);
+}
+
 /** Longest campaign slug we'll store — anything beyond this is a crafted URL,
  *  not a real campaign name. */
 const MAX_CAMPAIGN_LEN = 120;

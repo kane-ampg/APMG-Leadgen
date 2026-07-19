@@ -1,6 +1,7 @@
 import { sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import {
   insertPortalEvents,
+  isBotRequest,
   isInternalRequest,
   lookupLead,
   readAttribution,
@@ -87,6 +88,15 @@ export async function POST(req: Request): Promise<Response> {
   // inspector drawer is unaffected (it reads the client-side ring buffer).
   if (isInternalRequest(req)) {
     return Response.json({ accepted: 0, internal: true }, { status: 202 });
+  }
+
+  // BOT/SCANNER TRAFFIC IS NOT TELEMETRY. Email link-scanners and headless
+  // crawlers that follow a tracked link can then load /portal and fire the
+  // same portal_view/portal_service_open beacons a human would — accept-and-
+  // drop them (same as internal) so automated fetching never inflates funnel
+  // totals or writes into a lead's trail. Matched on User-Agent (isBotRequest).
+  if (isBotRequest(req)) {
+    return Response.json({ accepted: 0, bot: true }, { status: 202 });
   }
 
   const target = supabaseTarget();

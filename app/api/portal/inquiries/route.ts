@@ -10,6 +10,7 @@ import {
 import {
   INQUIRY_STATUSES,
   insertPortalEvents,
+  isBotRequest,
   isInternalRequest,
   isMissingPortalTable,
   lookupLead,
@@ -166,12 +167,14 @@ export async function POST(req: Request): Promise<Response> {
       { status: 409 },
     );
   }
-  // Operator test submission (browser marked internal by the admin dashboard —
-  // middleware.ts): keep the enquiry row so the flow stays testable end-to-end
-  // (it's visible and deletable on the Enquiries tab), but strip attribution
-  // and skip the canonical funnel event below — a test enquiry must never
-  // appear in a lead's Telemetry trail or the enquiry totals.
-  const internal = isInternalRequest(req);
+  // Non-prospect submission — keep the enquiry row so the flow stays testable
+  // end-to-end (it's visible and deletable on the Enquiries tab), but strip
+  // attribution and skip the canonical funnel event below so it never appears
+  // in a lead's Telemetry trail or the enquiry totals. Two kinds:
+  //  • internal — operator test submission (browser marked by middleware.ts).
+  //  • bot — a scanner/script that somehow posted the form (belt & braces on
+  //    top of the honeypot); its UA gives it away (isBotRequest).
+  const internal = isInternalRequest(req) || isBotRequest(req);
 
   // Attribution enrichment: snapshot the lead's name + CSV category now (leads
   // get reimported/deleted, so a join-at-read-time would rot).

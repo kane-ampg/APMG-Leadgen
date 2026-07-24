@@ -13,10 +13,12 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Globe,
   Mail,
+  MailX,
   PenLine,
   RefreshCw,
   RotateCcw,
@@ -144,6 +146,9 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // folders chosen first, before the leads — leads are scoped to this set
   const [folderSel, setFolderSel] = useState<Set<string>>(new Set());
   const [q, setQ] = useState("");
+  // audience filter: only leads we've never sent an outreach email (per the
+  // email_sent ledger count the leads API attaches to each row)
+  const [unsentOnly, setUnsentOnly] = useState(false);
 
   // ── compose ──
   const [campaign, setCampaign] = useState(DEFAULT_CAMPAIGN);
@@ -249,13 +254,17 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // an email are kept out of the audience entirely — they sit in the "No email"
   // section of their folder on the Leads tab (where Find emails lives now)
   // until an address is found for them.
-  const targets = useMemo<LeadView[]>(
-    () =>
-      load.status === "ready"
-        ? load.rows.filter((r) => r.id && (r.emails?.length ?? 0) > 0)
-        : [],
-    [load],
-  );
+  const targets = useMemo<LeadView[]>(() => {
+    if (load.status !== "ready") return [];
+    // dedupe by id — a repeated lead here would echo through everything keyed
+    // on it (audience rows, picked set, drafts) as duplicate React keys
+    const seen = new Set<string>();
+    return load.rows.filter((r) => {
+      if (!r.id || (r.emails?.length ?? 0) === 0 || seen.has(r.id)) return false;
+      seen.add(r.id);
+      return true;
+    });
+  }, [load]);
 
   // drop picked ids that no longer exist after a refresh
   useEffect(() => {
@@ -267,18 +276,25 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     });
   }, [targets]);
 
-  // keep the audience scoped to the chosen folders — deselecting a folder in
-  // step 1 (or clearing them) drops its picked leads, so nothing hidden is sent
+  // keep the audience scoped to the chosen folders and the unsent-only filter —
+  // deselecting a folder (or turning the filter on) drops the picked leads it
+  // hides, so nothing hidden is sent
   useEffect(() => {
     setPicked((prev) => {
       if (prev.size === 0) return prev;
       const next = new Set<string>();
       for (const r of targets) {
-        if (r.id && prev.has(r.id) && folderSel.has(r.batch ?? UNGROUPED)) next.add(r.id);
+        if (
+          r.id &&
+          prev.has(r.id) &&
+          folderSel.has(r.batch ?? UNGROUPED) &&
+          (!unsentOnly || (r.emails_sent ?? 0) === 0)
+        )
+          next.add(r.id);
       }
       return next.size === prev.size ? prev : next;
     });
-  }, [folderSel, targets]);
+  }, [folderSel, targets, unsentOnly]);
 
   // folder options (newest folders first; Ungrouped sinks to the bottom) + a
   // per-folder count of campaignable leads, shown on each chip
@@ -314,7 +330,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
 
   const term = q.trim().toLowerCase();
   // leads are scoped to the chosen folders — nothing shows until one is picked.
-  const visible = useMemo(() => {
+  const inScope = useMemo(() => {
     if (folderSel.size === 0) return [];
     return targets
       .filter((r) => folderSel.has(r.batch ?? UNGROUPED))
@@ -326,6 +342,16 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           : true,
       );
   }, [targets, folderSel, term]);
+  // "Not yet emailed" chip count — unsent leads within the current folder +
+  // search scope, so the number always matches what toggling would show
+  const unsentCount = useMemo(
+    () => inScope.filter((r) => (r.emails_sent ?? 0) === 0).length,
+    [inScope],
+  );
+  const visible = useMemo(
+    () => (unsentOnly ? inScope.filter((r) => (r.emails_sent ?? 0) === 0) : inScope),
+    [inScope, unsentOnly],
+  );
 
   // the current selection (drives Compose) + how many need a website scrape
   const pickedTargets = useMemo(
@@ -932,6 +958,9 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           folderSel={folderSel}
           folderCounts={folderCounts}
           q={q}
+          unsentOnly={unsentOnly}
+          unsentCount={unsentCount}
+          onToggleUnsent={() => setUnsentOnly((v) => !v)}
           onToggleFolder={toggleFolder}
           onSelectAllFolders={selectAllFolders}
           onClearFolders={clearFolders}
@@ -1202,6 +1231,9 @@ function AudiencePanel({
   folderSel,
   folderCounts,
   q,
+  unsentOnly,
+  unsentCount,
+  onToggleUnsent,
   onToggleFolder,
   onSelectAllFolders,
   onClearFolders,
@@ -1227,6 +1259,9 @@ function AudiencePanel({
   folderSel: Set<string>;
   folderCounts: Map<string, number>;
   q: string;
+  unsentOnly: boolean;
+  unsentCount: number;
+  onToggleUnsent: () => void;
   onToggleFolder: (f: string) => void;
   onSelectAllFolders: () => void;
   onClearFolders: () => void;
@@ -1385,6 +1420,26 @@ function AudiencePanel({
                   )}
                 </div>
 
+                {/* only leads never sent an outreach email (email_sent ledger).
+                    Turning it on also drops already-emailed leads from the
+                    selection, so nothing hidden is sent. */}
+                <button
+                  type="button"
+                  onClick={onToggleUnsent}
+                  aria-pressed={unsentOnly}
+                  data-track="campaign_filter_unsent"
+                  className={cn(
+                    "inline-flex h-8 items-center gap-1.5 rounded-lg border px-3 text-[11px] font-medium transition-colors",
+                    unsentOnly
+                      ? "border-primary/50 bg-primary/10 text-foreground"
+                      : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+                  )}
+                >
+                  <MailX className="h-3.5 w-3.5" aria-hidden />
+                  Not yet emailed
+                  <span className="tnum">{unsentCount.toLocaleString("en-US")}</span>
+                </button>
+
                 <span className="ml-auto font-mono text-[10.5px] text-muted-foreground">
                   <span className="tnum text-foreground">{selectedCount.toLocaleString("en-US")}</span> selected
                 </span>
@@ -1393,7 +1448,13 @@ function AudiencePanel({
               <LeadsTableView
                 rows={visible}
                 selection={{ selected: picked, onToggle, onToggleAll, onSelectMany }}
-                emptyHint={q ? `No leads match “${q.trim()}”.` : "No leads in the selected folders."}
+                emptyHint={
+                  q
+                    ? `No leads match “${q.trim()}”.`
+                    : unsentOnly
+                      ? "Every lead in the selected folders has already been emailed — turn off “Not yet emailed” to see them."
+                      : "No leads in the selected folders."
+                }
               />
             </>
           )}
@@ -1442,67 +1503,132 @@ function FolderChooser({
   onClear: () => void;
 }) {
   const allOn = folders.length > 0 && folders.every((f) => folderSel.has(f));
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // close on outside click / Escape while the menu is open
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(e: PointerEvent) {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  // trigger summary: name a single pick, otherwise a count + the total leads
+  const selected = folders.filter((f) => folderSel.has(f));
+  const pickedLeadCount = selected.reduce((n, f) => n + (folderCounts.get(f) ?? 0), 0);
+  const triggerLabel =
+    selected.length === 0
+      ? "Select folders…"
+      : selected.length === 1
+        ? folderLabel(selected[0])
+        : allOn
+          ? `All folders (${folders.length})`
+          : `${selected.length} folders`;
+
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-          Step 1 · Choose folders
-        </span>
-        {folders.length > 1 && (
-          <div className="flex items-center gap-3 font-mono text-[10px]">
-            <button
-              type="button"
-              onClick={onSelectAll}
-              disabled={allOn}
-              data-track="campaign_folders_all"
-              className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Select all
-            </button>
-            <button
-              type="button"
-              onClick={onClear}
-              disabled={folderSel.size === 0}
-              data-track="campaign_folders_clear"
-              className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Clear
-            </button>
+      <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+        Step 1 · Choose folders
+      </span>
+
+      <div ref={rootRef} className="relative w-full max-w-sm">
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          data-track="campaign_folders_toggle"
+          className={cn(
+            "inline-flex h-9 w-full items-center justify-between gap-2 rounded-lg border bg-background px-3 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            selected.length > 0 ? "border-primary/50 text-foreground" : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground",
+          )}
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <span className="truncate font-medium">{triggerLabel}</span>
+            {selected.length > 0 && (
+              <span className="tnum shrink-0 font-mono text-[10px] text-muted-foreground">
+                {pickedLeadCount.toLocaleString("en-US")} lead{pickedLeadCount === 1 ? "" : "s"}
+              </span>
+            )}
+          </span>
+          <ChevronDown
+            className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")}
+            aria-hidden
+          />
+        </button>
+
+        {open && (
+          <div
+            role="listbox"
+            aria-multiselectable="true"
+            className="absolute z-20 mt-1.5 w-full overflow-hidden rounded-lg border border-border bg-card shadow-lg ring-1 ring-foreground/5"
+          >
+            {folders.length > 1 && (
+              <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 font-mono text-[10px]">
+                <button
+                  type="button"
+                  onClick={onSelectAll}
+                  disabled={allOn}
+                  data-track="campaign_folders_all"
+                  className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Select all
+                </button>
+                <button
+                  type="button"
+                  onClick={onClear}
+                  disabled={folderSel.size === 0}
+                  data-track="campaign_folders_clear"
+                  className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Clear
+                </button>
+              </div>
+            )}
+            <div className="max-h-64 overflow-y-auto py-1">
+              {folders.map((f) => {
+                const active = folderSel.has(f);
+                return (
+                  <button
+                    key={f}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    onClick={() => onToggleFolder(f)}
+                    data-track="campaign_select_folder"
+                    className={cn(
+                      "flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors",
+                      active ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                        active ? "border-primary bg-primary-solid text-primary-foreground" : "border-border",
+                      )}
+                    >
+                      {active && <Check className="h-3 w-3" aria-hidden />}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium">{folderLabel(f)}</span>
+                    <span className="tnum shrink-0 font-mono text-[10px] text-muted-foreground">
+                      {(folderCounts.get(f) ?? 0).toLocaleString("en-US")}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {folders.map((f) => {
-          const active = folderSel.has(f);
-          return (
-            <button
-              key={f}
-              type="button"
-              onClick={() => onToggleFolder(f)}
-              aria-pressed={active}
-              data-track="campaign_select_folder"
-              className={cn(
-                "inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs transition-colors",
-                active
-                  ? "border-primary/50 bg-primary/10 text-foreground"
-                  : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
-              )}
-            >
-              <span
-                className={cn(
-                  "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
-                  active ? "border-primary bg-primary-solid text-primary-foreground" : "border-border",
-                )}
-              >
-                {active && <Check className="h-3 w-3" aria-hidden />}
-              </span>
-              <span className="max-w-[180px] truncate font-medium">{folderLabel(f)}</span>
-              <span className="tnum font-mono text-[10px] text-muted-foreground">
-                {(folderCounts.get(f) ?? 0).toLocaleString("en-US")}
-              </span>
-            </button>
-          );
-        })}
       </div>
     </div>
   );

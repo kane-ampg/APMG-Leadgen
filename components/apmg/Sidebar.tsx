@@ -13,6 +13,9 @@ import { useLeadActivityUnseenTotal } from "@/lib/data/leadActivityNotifications
 import { formatInt } from "@/lib/format";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { useRbac } from "@/lib/rbac/RbacProvider";
+import { type AppUser } from "@/lib/auth/users";
+import { clearSessionCookies } from "@/lib/auth/session";
+import { useSales } from "./SalesProvider";
 import { RoleSwitcher } from "@/components/rbac/RoleSwitcher";
 import { SignalLed } from "./SignalLed";
 import { ThemeToggle } from "./ThemeToggle";
@@ -24,6 +27,8 @@ interface SidebarProps {
   onClose: () => void;
   /** make the drawer unreachable while a modal (the inspector) is open */
   inert?: boolean;
+  /** signed-in session user (via /login); falls back to the operator card */
+  user?: AppUser;
 }
 
 /**
@@ -31,7 +36,7 @@ interface SidebarProps {
  * accent. Implements all five required slots: brand, state pill, nav (in
  * ScrollArea), theme toggle (bottom of ScrollArea), user card / sign-out.
  */
-export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert }: SidebarProps) {
+export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, user }: SidebarProps) {
   // Telemetry badge = UNSEEN customer activity (new lead events since each
   // row was last acknowledged) — NOT lib/telemetry's ping counter, which
   // counts the operator's own dashboard clicks. Hidden at zero: it's a
@@ -42,6 +47,9 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert }: S
   // (polls + refreshes on focus), so the badge is never a stale placeholder.
   const { state: leadStats } = useLeadStats({ pollMs: 15000 });
   const pipelineBadge = leadStats.status === "ready" ? formatInt(leadStats.data.total) : undefined;
+  // Sales badge = real queue size (leads the admin has emailed), hidden at zero.
+  const { total: salesQueueTotal } = useSales();
+  const salesBadge = salesQueueTotal > 0 ? formatInt(salesQueueTotal) : undefined;
   const ref = useRef<HTMLElement>(null);
   // Trap focus inside the drawer while it's open as a mobile overlay.
   useFocusTrap(mobileOpen, ref);
@@ -171,7 +179,9 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert }: S
                         : undefined
                       : item.id === "pipeline"
                         ? pipelineBadge
-                        : item.badge;
+                        : item.id === "sales"
+                          ? salesBadge
+                          : item.badge;
                   // Telemetry's badge is a NOTIFICATION (new lead activity) —
                   // solid signal red, unlike the quiet informational counts.
                   const notify = item.id === "telemetry" && !!badge;
@@ -268,17 +278,19 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert }: S
           )}
         >
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-solid text-[11px] font-semibold text-primary-foreground">
-            KR
+            {user?.initials ?? "KR"}
           </div>
           <div className={cn("min-w-0 flex-1", collapsed && "md:hidden")}>
             <div className="flex items-center gap-1.5">
-              <span className="truncate text-[13px] font-medium text-foreground">Kane Reroma</span>
+              <span className="truncate text-[13px] font-medium text-foreground">
+                {user?.name ?? "Kane Reroma"}
+              </span>
               <span className="shrink-0 rounded border border-border px-1 py-px font-mono text-[8.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
                 {roleLabel}
               </span>
             </div>
             <div className="mt-px truncate font-mono text-[11px] text-muted-foreground">
-              kane@apmgservices.com.au
+              {user?.email ?? "kane@apmgservices.com.au"}
             </div>
           </div>
           <button
@@ -298,6 +310,10 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert }: S
           data-track="sign_out"
           aria-label={collapsed ? "Sign out" : undefined}
           title={collapsed ? "Sign out" : undefined}
+          onClick={() => {
+            clearSessionCookies();
+            window.location.assign("/login");
+          }}
           className="mt-2 w-full justify-start gap-3 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
         >
           <LogOut className="h-4 w-4 shrink-0" />

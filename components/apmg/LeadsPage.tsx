@@ -24,7 +24,7 @@ export function LeadsPage() {
 
       <Reveal delay={0.04}>
         <div className="rounded-xl bg-card p-4 ring-1 ring-foreground/10 sm:p-5">
-          <StoredLeadsPanel refreshSignal={0} />
+          <StoredLeadsPanel refreshSignal={0} enableGlobalSearch />
         </div>
       </Reveal>
 

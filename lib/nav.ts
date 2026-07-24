@@ -65,7 +65,8 @@ export const NAV: NavSection[] = [
   {
     caption: "Sell",
     items: [
-      { id: "sales", label: "Sales", icon: PhoneCall, badge: "24", perm: "sales.view" },
+      // Sales badge is injected live by the Sidebar (real queue size from useSales)
+      { id: "sales", label: "Sales", icon: PhoneCall, perm: "sales.view" },
       { id: "closed", label: "Closed deals", icon: Handshake, perm: "sales.view" },
     ],
   },

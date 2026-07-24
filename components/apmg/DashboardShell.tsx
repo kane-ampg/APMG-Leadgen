@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { firstAllowedTab, TAB_LABEL, TAB_PERMISSION, type TabId } from "@/lib/nav";
 import { useClickTelemetry } from "@/lib/telemetry";
 import { useRbac } from "@/lib/rbac/RbacProvider";
+import { type AppUser } from "@/lib/auth/users";
 import { ClickPing } from "./ClickPing";
 import { CommandBar } from "./CommandBar";
 import { ClosedDealsPage } from "./ClosedDealsPage";
@@ -28,7 +29,7 @@ import { TelemetryPage } from "./TelemetryPage";
  * Root shell (ui-standards §1.1): h-dvh overflow-hidden flex → sidebar + main.
  * Content scrolls inside the main area, never the page body.
  */
-export function DashboardShell() {
+export function DashboardShell({ user }: { user?: AppUser }) {
   const reduce = useReducedMotion();
   const [activeTab, setActiveTab] = useState<TabId>("overview");
   const [navOpen, setNavOpen] = useState(false);
@@ -68,6 +69,7 @@ export function DashboardShell() {
         mobileOpen={navOpen}
         onClose={() => setNavOpen(false)}
         inert={inspectorOpen}
+        user={user}
       />
 
       {/* mobile drawer backdrop */}

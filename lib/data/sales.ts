@@ -1,12 +1,13 @@
 /**
- * Sales queue preset. A lead reaches Sales only AFTER admin has sent the
- * automation's custom email (`emailSent`). `engaged` means the lead clicked the
+ * Sales queue types + the demo-mode preset. A lead reaches Sales only AFTER
+ * admin has sent the automation's custom email — live, that gate is the
+ * `email_sent` ledger in portal_events, read by /api/sales/queue and mapped
+ * into this shape by SalesProvider. `engaged` means the lead clicked the
  * tracked link in that email (proof the automation worked + the lead is ours).
  *
- * Shape mirrors the real pipeline: business details come from the Bing Maps
- * scraper (name, category, phone, rating, website), the best contact email
- * comes from the n8n email-extraction step, and `aiSummary` is the
- * AI-prepared brief the rep reads before calling (see lib/ai/leadSummary.ts).
+ * Optional fields are simply absent on real scraped leads (no AI brief, score,
+ * or deal estimate yet) — the preset below fills everything in so demo mode
+ * still shows the full card.
  */
 
 export type SalesStatus = "new" | "contacted" | "closed_won" | "closed_lost";
@@ -15,27 +16,29 @@ export interface SalesLead {
   id: string;
   business: string;
   category: string;
-  location: string;
-  website: string;
-  phone: string;
-  email: string;
-  rating: number;
-  reviews: number;
+  location?: string;
+  website?: string;
+  phone?: string;
+  email?: string;
+  rating?: number;
+  reviews?: number;
   /** fit / qualification score 0–100 */
-  score: number;
+  score?: number;
   /** AI-prepared brief the rep reads before the call */
-  aiSummary: string;
-  talkingPoints: string[];
+  aiSummary?: string;
+  talkingPoints?: string[];
   /** admin has sent the automation's custom email — gates entry to the queue */
   emailSent: boolean;
   emailSentAt: string;
+  /** total outreach emails sent to this lead (email_sent ledger tally) */
+  emailsSent?: number;
   /** lead clicked the tracked link in the email (attribution confirmed) */
   engaged: boolean;
   engagedAt?: string;
   status: SalesStatus;
-  assignedRep: string;
+  assignedRep?: string;
   /** estimated (open) or realised (won) deal value, USD */
-  dealValue: number;
+  dealValue?: number;
   /** when it landed in the sales queue */
   receivedAt: string;
   /** set when the rep closes the deal via the close modal */

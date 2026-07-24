@@ -37,7 +37,7 @@ export function CloseDealModal({
   useEffect(() => {
     if (lead) {
       setNote("");
-      setValue(lead.dealValue);
+      setValue(lead.dealValue ?? 0);
       // focus the note field after the trap's initial focus + paint
       requestAnimationFrame(() => noteRef.current?.focus());
     }

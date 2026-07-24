@@ -13,7 +13,11 @@ import { countEmailsSentByLead } from "@/lib/portal/server";
 export const runtime = "nodejs";
 
 const TABLE = "leads";
-const LIMIT = 2000;
+// PostgREST silently caps every response at its max-rows setting (1000 by
+// default), so the flat read pages through the table instead of trusting one
+// big fetch. LIMIT bounds the total rows we'll return in one response.
+const PAGE = 1000;
+const LIMIT = 10000;
 // the flat listing doesn't need the later-added columns; full reads add them on
 const COLS_BASE =
   "id,name,address,featured_image,bing_maps_url,rating,website,phone,emails,social_medias,facebook,instagram,twitter,created_at";
@@ -29,9 +33,11 @@ function batchFilter(value: string | null): string | null {
   return safe ? `batch=eq.${encodeURIComponent(safe)}` : null;
 }
 
-function fetchLeads(target: Target, cols: string, filter: string | null): Promise<Response> {
+function fetchLeads(target: Target, cols: string, filter: string | null, offset = 0): Promise<Response> {
+  // `id` tiebreaker: created_at ties (bulk imports) make the sort unstable
+  // across page requests, which duplicates/drops rows at page boundaries.
   const url =
-    `${target.base}/rest/v1/${TABLE}?select=${cols}&order=created_at.desc&limit=${LIMIT}` +
+    `${target.base}/rest/v1/${TABLE}?select=${cols}&order=created_at.desc,id.asc&limit=${PAGE}&offset=${offset}` +
     (filter ? `&${filter}` : "");
   return fetch(url, {
     headers: { apikey: target.key, Authorization: `Bearer ${target.key}`, Prefer: "count=exact" },
@@ -55,9 +61,11 @@ export async function GET(req: Request): Promise<Response> {
 
   const filter = batchFilter(new URL(req.url).searchParams.get("batch"));
 
+  // Track the column set that succeeds so follow-up pages request the same one.
+  let cols = COLS;
   let res: Response;
   try {
-    res = await fetchLeads(target, COLS, filter);
+    res = await fetchLeads(target, cols, filter);
   } catch (e) {
     console.error("[pipeline/leads] fetch to Supabase failed:", e);
     return Response.json({ ok: false, mode: "live", rows: [], total: 0, error: "Could not reach the database." }, { status: 502 });
@@ -77,7 +85,7 @@ export async function GET(req: Request): Promise<Response> {
       }
       // Filtered read with only `category` missing → keep the filter, drop
       // `category`. Flat listing → drop both optional columns.
-      const cols = filter ? `${COLS_BASE},batch` : COLS_BASE;
+      cols = filter ? `${COLS_BASE},batch` : COLS_BASE;
       try {
         res = await fetchLeads(target, cols, filter);
       } catch (e) {
@@ -116,10 +124,37 @@ export async function GET(req: Request): Promise<Response> {
   const fromHeader = range.includes("/") ? Number(range.split("/")[1]) : NaN;
   const total = Number.isFinite(fromHeader) ? fromHeader : Array.isArray(rows) ? rows.length : 0;
 
+  const list = Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
+
+  // Page through the rest (PostgREST caps each response at max-rows; `total`
+  // comes from the count=exact header). A failed later page just truncates the
+  // listing rather than failing the whole read.
+  while (list.length > 0 && list.length < Math.min(total, LIMIT)) {
+    let pageRes: Response;
+    try {
+      pageRes = await fetchLeads(target, cols, filter, list.length);
+    } catch (e) {
+      console.error("[pipeline/leads] page fetch failed:", e);
+      break;
+    }
+    if (!pageRes.ok) {
+      const detail = await pageRes.text().catch(() => "");
+      console.error(`[pipeline/leads] page ${pageRes.status}:`, detail.slice(0, 500));
+      break;
+    }
+    const page = (await pageRes.json().catch(() => [])) as Array<Record<string, unknown>>;
+    if (!Array.isArray(page) || page.length === 0) break;
+    // rows written mid-pagination can still shift the offset window; never let
+    // a lead appear twice in the merged listing (dup React keys client-side)
+    const seen = new Set(list.map((r) => r.id));
+    const fresh = page.filter((r) => !seen.has(r.id));
+    if (fresh.length === 0) break;
+    list.push(...fresh);
+  }
+
   // Enrich each lead with how many outreach emails it has been sent (from the
   // email_sent ledger in portal_events). Best-effort: a failed/absent tally
   // just leaves the count at 0, never fails the leads read.
-  const list = Array.isArray(rows) ? (rows as Array<Record<string, unknown>>) : [];
   const ids = list.map((r) => (typeof r.id === "string" ? r.id : "")).filter(Boolean);
   const sentByLead = await countEmailsSentByLead(target.base, target.key, ids);
   for (const r of list) {

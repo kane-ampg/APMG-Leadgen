@@ -27,7 +27,7 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
 
 export function ClosedDealsPage() {
   const { closedDeals } = useSales();
-  const total = closedDeals.reduce((sum, l) => sum + (l.closedValue ?? l.dealValue), 0);
+  const total = closedDeals.reduce((sum, l) => sum + (l.closedValue ?? l.dealValue ?? 0), 0);
   const avg = closedDeals.length ? Math.round(total / closedDeals.length) : 0;
 
   return (
@@ -75,12 +75,12 @@ export function ClosedDealsPage() {
                       {lead.business}
                     </h3>
                     <div className="mt-0.5 truncate font-mono text-[10.5px] uppercase tracking-[0.08em] text-muted-foreground">
-                      {lead.category} · {lead.location}
+                      {[lead.category, lead.location].filter(Boolean).join(" · ") || "—"}
                     </div>
                   </div>
                   <div className="shrink-0 text-right">
                     <div className="tnum font-mono text-base font-semibold text-foreground">
-                      {formatUsd(lead.closedValue ?? lead.dealValue)}
+                      {formatUsd(lead.closedValue ?? lead.dealValue ?? 0)}
                     </div>
                     <span className="mt-0.5 inline-flex items-center rounded-full border border-transparent bg-primary-solid px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-primary-foreground">
                       Closed
@@ -90,39 +90,48 @@ export function ClosedDealsPage() {
 
                 {/* profile / contact */}
                 <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 font-mono text-[11.5px] text-muted-foreground">
-                  <span className="inline-flex items-center gap-1.5">
-                    <Star className="h-3 w-3" aria-hidden />
-                    {lead.rating.toFixed(1)} · {lead.reviews}
-                  </span>
-                  <a
-                    href={`tel:${lead.phone.replace(/[^0-9+]/g, "")}`}
-                    data-track="closed_call"
-                    data-track-lead={lead.id}
-                    className="inline-flex items-center gap-1.5 transition-colors hover:text-primary"
-                  >
-                    <Phone className="h-3 w-3" aria-hidden />
-                    {lead.phone}
-                  </a>
-                  <a
-                    href={`mailto:${lead.email}`}
-                    data-track="closed_email"
-                    data-track-lead={lead.id}
-                    className="inline-flex items-center gap-1.5 truncate transition-colors hover:text-primary"
-                  >
-                    <Mail className="h-3 w-3 shrink-0" aria-hidden />
-                    <span className="truncate">{lead.email}</span>
-                  </a>
-                  <a
-                    href={`https://${lead.website}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    data-track="closed_website"
-                    data-track-lead={lead.id}
-                    className="inline-flex items-center gap-1.5 truncate transition-colors hover:text-primary"
-                  >
-                    <Globe className="h-3 w-3 shrink-0" aria-hidden />
-                    <span className="truncate">{lead.website}</span>
-                  </a>
+                  {lead.rating != null && (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Star className="h-3 w-3" aria-hidden />
+                      {lead.rating.toFixed(1)}
+                      {lead.reviews != null && <> · {lead.reviews}</>}
+                    </span>
+                  )}
+                  {lead.phone && (
+                    <a
+                      href={`tel:${lead.phone.replace(/[^0-9+]/g, "")}`}
+                      data-track="closed_call"
+                      data-track-lead={lead.id}
+                      className="tnum inline-flex items-center gap-2 text-[15px] font-semibold text-foreground transition-colors hover:text-primary"
+                    >
+                      <Phone className="h-4 w-4 text-primary" aria-hidden />
+                      {lead.phone}
+                    </a>
+                  )}
+                  {lead.email && (
+                    <a
+                      href={`mailto:${lead.email}`}
+                      data-track="closed_email"
+                      data-track-lead={lead.id}
+                      className="inline-flex items-center gap-1.5 truncate transition-colors hover:text-primary"
+                    >
+                      <Mail className="h-3 w-3 shrink-0" aria-hidden />
+                      <span className="truncate">{lead.email}</span>
+                    </a>
+                  )}
+                  {lead.website && (
+                    <a
+                      href={`https://${lead.website}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      data-track="closed_website"
+                      data-track-lead={lead.id}
+                      className="inline-flex items-center gap-1.5 truncate transition-colors hover:text-primary"
+                    >
+                      <Globe className="h-3 w-3 shrink-0" aria-hidden />
+                      <span className="truncate">{lead.website}</span>
+                    </a>
+                  )}
                 </div>
 
                 {/* closing note */}
@@ -141,10 +150,14 @@ export function ClosedDealsPage() {
                 {/* footer */}
                 <div className="mt-3 flex items-center gap-2 border-t border-border pt-3 font-mono text-[11px] text-muted-foreground">
                   <span>Closed {lead.closedAt ?? "recently"}</span>
-                  <span aria-hidden className="text-border">
-                    ·
-                  </span>
-                  <span className="text-foreground/80">{lead.assignedRep}</span>
+                  {lead.assignedRep && (
+                    <>
+                      <span aria-hidden className="text-border">
+                        ·
+                      </span>
+                      <span className="text-foreground/80">{lead.assignedRep}</span>
+                    </>
+                  )}
                 </div>
               </div>
             </Reveal>

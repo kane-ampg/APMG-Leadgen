@@ -192,15 +192,9 @@ function fmtImport(iso: string | null): string {
 export function OverviewPage() {
   const { role } = useRbac();
   const { state, reload } = useLeadStats();
-  const { leads } = useSales();
-
-  const salesStats = useMemo<SalesStats>(() => {
-    const open = leads.filter((l) => l.status === "new" || l.status === "contacted").length;
-    const engaged = leads.filter((l) => l.engaged && l.status !== "closed_lost").length;
-    const won = leads.filter((l) => l.status === "closed_won");
-    const wonValue = won.reduce((sum, l) => sum + (l.closedValue ?? l.dealValue), 0);
-    return { open, engaged, won: won.length, wonValue, queueTotal: leads.length };
-  }, [leads]);
+  // Live funnel tallies from the real sales queue (whole queue, not just the
+  // page currently loaded on the Sales tab).
+  const { stats: salesStats } = useSales();
 
   const copy = copyFor(role);
   const data = state.status === "ready" ? state.data : null;

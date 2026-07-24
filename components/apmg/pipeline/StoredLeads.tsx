@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
   ChevronRight,
   Database,
   Folder,
@@ -22,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { ErrorInline, LeadsTableView, TableSkeleton, type LeadView } from "./LeadsTable";
 import { LeadDetail } from "./LeadDetail";
 import { LeadsExportMenu } from "./LeadsExport";
+import { FindEmailsResult, type FindEmailsOutcome } from "./FindEmailsResult";
 
 const EASE = [0.16, 1, 0.3, 1] as const;
 
@@ -85,10 +87,14 @@ export function StoredLeadsPanel({
   refreshSignal,
   openBatch,
   banner,
+  enableGlobalSearch,
 }: {
   refreshSignal: number;
   openBatch?: string | null;
   banner?: ReactNode;
+  /** Leads tab: show a search-all-leads bar + folder filter above the grid.
+   *  Off in the Pipeline import flow, which deep-links straight into a folder. */
+  enableGlobalSearch?: boolean;
 }) {
   const [open, setOpen] = useState<string | null>(openBatch ?? null);
   const [localRefresh, setLocalRefresh] = useState(0);
@@ -112,6 +118,12 @@ export function StoredLeadsPanel({
             setLocalRefresh((n) => n + 1);
           }}
         />
+      ) : enableGlobalSearch ? (
+        <AllLeadsView
+          refreshKey={refreshSignal + localRefresh}
+          onOpen={setOpen}
+          onChanged={() => setLocalRefresh((n) => n + 1)}
+        />
       ) : (
         <FoldersView refreshKey={refreshSignal + localRefresh} onOpen={setOpen} />
       )}
@@ -119,32 +131,278 @@ export function StoredLeadsPanel({
   );
 }
 
+/* ─────────────────────────  all-leads search + filter  ───────────────────── */
+
+const ALL_FOLDERS = "__all__";
+
+type AllLeadsState =
+  | { status: "loading" }
+  | { status: "error"; error: string; needsMigration?: boolean }
+  | { status: "ready"; rows: LeadView[]; total: number };
+
+/**
+ * Leads-tab landing surface: a search-all-leads bar + a folder filter dropdown
+ * sitting above the folder grid.
+ *
+ * Idle (no search text, folder = "All folders") it shows the usual folder grid,
+ * so browsing-by-import is untouched. The moment you type a search OR pick a
+ * folder, it flips to a flat, cross-folder results table (the shared
+ * SelectableLeads, so select / delete / export / find-emails all still work).
+ *
+ * All leads are fetched once (the flat GET, no `batch` param) and both filters
+ * run client-side — instant, and it reuses the same endpoint the flat fallback
+ * already relies on.
+ */
+function AllLeadsView({
+  refreshKey,
+  onOpen,
+  onChanged,
+}: {
+  refreshKey: number;
+  onOpen: (batch: string) => void;
+  onChanged: () => void;
+}) {
+  const [state, setState] = useState<AllLeadsState>({ status: "loading" });
+  const [q, setQ] = useState("");
+  const [folder, setFolder] = useState<string>(ALL_FOLDERS);
+
+  const load = useCallback(async () => {
+    setState({ status: "loading" });
+    try {
+      const res = await fetch("/api/pipeline/leads", { cache: "no-store" });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; rows?: LeadView[]; total?: number; error?: string; needsMigration?: boolean }
+        | null;
+      if (data?.needsMigration) {
+        setState({ status: "error", error: data.error ?? "Migration needed.", needsMigration: true });
+        return;
+      }
+      if (!res.ok || !data?.ok) {
+        setState({ status: "error", error: data?.error ?? `Couldn't load leads (${res.status}).` });
+        return;
+      }
+      setState({ status: "ready", rows: data.rows ?? [], total: data.total ?? 0 });
+    } catch {
+      setState({ status: "error", error: "Network error loading leads." });
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load, refreshKey]);
+
+  const rows = state.status === "ready" ? state.rows : [];
+
+  // Folder options for the dropdown, derived from the loaded rows so counts stay
+  // in lockstep with what search can actually find. Alphabetical (easiest to
+  // scan in a <select>); the Ungrouped bucket (null batch) sinks to the bottom.
+  const folderOptions = (() => {
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const key = r.batch ?? UNGROUPED;
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([batch, count]) => ({ batch, count }))
+      .sort((a, b) => {
+        if (a.batch === UNGROUPED) return 1;
+        if (b.batch === UNGROUPED) return -1;
+        return a.batch.localeCompare(b.batch);
+      });
+  })();
+
+  // a picked folder that no longer exists (after a refresh) falls back to "all"
+  useEffect(() => {
+    if (folder === ALL_FOLDERS) return;
+    if (state.status === "ready" && !folderOptions.some((o) => o.batch === folder)) {
+      setFolder(ALL_FOLDERS);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.status, folder, rows]);
+
+  const folderFiltered =
+    folder === ALL_FOLDERS
+      ? rows
+      : rows.filter((r) => (r.batch ?? UNGROUPED) === folder);
+
+  const searching = q.trim() !== "";
+  const filtering = folder !== ALL_FOLDERS;
+  // Idle (no text, no folder) → the folder grid. Otherwise → flat results.
+  const showResults = searching || filtering;
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* search-all + folder filter bar */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative w-full min-w-0 flex-1 sm:max-w-sm">
+          <Search
+            className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <input
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search all leads…"
+            aria-label="Search all leads"
+            data-track="leads_search_all"
+            className="h-9 w-full rounded-lg border border-border bg-background pl-8 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+          {q && (
+            <button
+              type="button"
+              onClick={() => setQ("")}
+              aria-label="Clear search"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-3.5 w-3.5" aria-hidden />
+            </button>
+          )}
+        </div>
+
+        <div className="relative w-full min-w-0 sm:w-auto sm:max-w-[16rem]">
+          <Folder
+            className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+          <select
+            value={folder}
+            onChange={(e) => setFolder(e.target.value)}
+            aria-label="Filter leads by folder"
+            data-track="leads_filter_folder"
+            disabled={state.status !== "ready"}
+            className={cn(
+              "h-9 w-full min-w-0 cursor-pointer truncate appearance-none rounded-lg border bg-background pl-8 pr-8 text-xs font-medium text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-default disabled:opacity-60",
+              filtering ? "border-primary/40 text-primary" : "border-border",
+            )}
+          >
+            <option value={ALL_FOLDERS}>
+              All folders{state.status === "ready" ? ` (${state.total.toLocaleString("en-US")})` : ""}
+            </option>
+            {folderOptions.map((o) => (
+              <option key={o.batch} value={o.batch}>
+                {folderLabel(o.batch)} ({o.count.toLocaleString("en-US")})
+              </option>
+            ))}
+          </select>
+          <ChevronDown
+            className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
+          />
+        </div>
+
+        {showResults && (
+          <button
+            type="button"
+            onClick={() => {
+              setQ("");
+              setFolder(ALL_FOLDERS);
+            }}
+            data-track="leads_clear_filters"
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
+            Clear
+          </button>
+        )}
+      </div>
+
+      {state.status === "loading" && <TableSkeleton />}
+      {state.status === "error" &&
+        (state.needsMigration ? (
+          <div className="flex flex-col gap-4">
+            <MigrationCard />
+            <FlatLeads />
+          </div>
+        ) : (
+          <ErrorInline message={state.error} onRetry={load} />
+        ))}
+
+      {state.status === "ready" &&
+        (showResults ? (
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+              <span>
+                {searching
+                  ? filtering
+                    ? `Search · ${folderLabel(folder)}`
+                    : "Search · all leads"
+                  : `Folder · ${folderLabel(folder)} · ${folderFiltered.length.toLocaleString("en-US")}`}
+              </span>
+              {filtering && (
+                <button
+                  type="button"
+                  onClick={() => onOpen(folder)}
+                  data-track="leads_open_filtered_folder"
+                  className="font-sans text-[10px] normal-case tracking-normal text-primary hover:underline"
+                >
+                  open folder →
+                </button>
+              )}
+            </div>
+            <SelectableLeads
+              rows={folderFiltered}
+              onChanged={() => {
+                onChanged();
+                load();
+              }}
+              emptyHint="No leads stored yet. Import a CSV from the Pipeline tab."
+              exportScope={filtering ? folderLabel(folder) : "All leads"}
+              query={q}
+              onQueryChange={setQ}
+              hideSearch
+            />
+          </div>
+        ) : (
+          <FoldersView refreshKey={refreshKey} onOpen={onOpen} />
+        ))}
+    </div>
+  );
+}
+
 /* ─────────────────────────  selectable table (shared)  ───────────────────── */
 
 /** Search + multi-select-delete + per-row View, over a given set of rows.
- *  Calls onChanged after a successful delete so the parent can refetch. */
+ *  Calls onChanged after a successful delete so the parent can refetch.
+ *
+ *  Search can be internal (its own box, used inside a folder) or controlled by
+ *  a parent (`query`/`onQueryChange`) — the all-leads view drives it from a
+ *  single top-level search bar and hides the internal box via `hideSearch`. */
 function SelectableLeads({
   rows,
   onChanged,
   emptyHint,
   exportScope,
+  query,
+  onQueryChange,
+  hideSearch,
 }: {
   rows: LeadView[];
   onChanged: () => void;
   emptyHint: string;
   /** Scope label for exports — the open folder's name, or "All leads". */
   exportScope: string;
+  /** Controlled search term. When provided, the internal search state is unused. */
+  query?: string;
+  onQueryChange?: (next: string) => void;
+  /** Hide the built-in search box (the parent renders its own). */
+  hideSearch?: boolean;
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [q, setQ] = useState("");
+  const [internalQ, setInternalQ] = useState("");
+  // controlled term when the parent supplies one, else the internal box's
+  const q = query ?? internalQ;
+  const setQ = onQueryChange ?? setInternalQ;
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [viewing, setViewing] = useState<LeadView | null>(null);
-  // Find emails run over the No email section (n8n Email Finder)
+  // Find emails run over the No email section (n8n Email Finder). The outcome
+  // surfaces in a result modal; `findOpen` drives its enter/exit animation and
+  // outlives `findResult` briefly so the exit can play on close.
   const [finding, setFinding] = useState(false);
-  const [findNote, setFindNote] = useState<string | null>(null);
-  const [findError, setFindError] = useState<string | null>(null);
+  const [findResult, setFindResult] = useState<FindEmailsOutcome | null>(null);
+  const [findOpen, setFindOpen] = useState(false);
 
   // drop selected ids that no longer exist (after a refresh)
   useEffect(() => {
@@ -220,8 +478,10 @@ function SelectableLeads({
       .map((r) => ({ id: r.id!, website: r.website! }));
     if (batch.length === 0 || finding) return;
     setFinding(true);
-    setFindNote(null);
-    setFindError(null);
+    const show = (outcome: FindEmailsOutcome) => {
+      setFindResult(outcome);
+      setFindOpen(true);
+    };
     try {
       const res = await fetch("/api/pipeline/campaigns/find-emails", {
         method: "POST",
@@ -232,22 +492,21 @@ function SelectableLeads({
         | { ok?: boolean; mode?: "live" | "demo" | "noop"; found?: number; error?: string }
         | null;
       if (!res.ok || !data?.ok) {
-        setFindError(data?.error ?? `The email finder responded ${res.status}.`);
+        show({ kind: "error", message: data?.error ?? `The email finder responded ${res.status}.` });
         return;
       }
       if (data.mode === "demo") {
-        setFindNote("The Email Finder automation isn't connected — add its webhook on the Integrations tab, then try again.");
+        show({
+          kind: "demo",
+          message:
+            "The Email Finder automation isn't connected — add its webhook on the Integrations tab, then try again.",
+        });
         return;
       }
-      const found = data.found ?? 0;
-      setFindNote(
-        `Found addresses for ${found.toLocaleString("en-US")} of ${batch.length.toLocaleString("en-US")} lead${batch.length === 1 ? "" : "s"}.${
-          found < batch.length ? " The rest had nothing scrapable." : ""
-        }`,
-      );
+      show({ kind: "success", found: data.found ?? 0, total: batch.length });
       onChanged();
     } catch {
-      setFindError("Network error reaching the email finder.");
+      show({ kind: "error", message: "Network error reaching the email finder." });
     } finally {
       setFinding(false);
     }
@@ -278,32 +537,34 @@ function SelectableLeads({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative w-full max-w-xs">
-          <Search
-            className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
-            aria-hidden
-          />
-          <input
-            type="text"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search…"
-            aria-label="Search leads"
-            data-track="leads_search"
-            className="h-8 w-full rounded-lg border border-border bg-background pl-8 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-          {q && (
-            <button
-              type="button"
-              onClick={() => setQ("")}
-              aria-label="Clear search"
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-3.5 w-3.5" aria-hidden />
-            </button>
-          )}
-        </div>
-        <div className="ml-auto flex items-center gap-2">
+        {!hideSearch && (
+          <div className="relative w-full max-w-xs">
+            <Search
+              className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <input
+              type="text"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Search…"
+              aria-label="Search leads"
+              data-track="leads_search"
+              className="h-8 w-full rounded-lg border border-border bg-background pl-8 pr-8 text-xs text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            {q && (
+              <button
+                type="button"
+                onClick={() => setQ("")}
+                aria-label="Clear search"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" aria-hidden />
+              </button>
+            )}
+          </div>
+        )}
+        <div className={cn("flex items-center gap-2", !hideSearch && "ml-auto")}>
           {selected.size > 0 && !confirming && (
             <Button
               variant="destructive"
@@ -404,14 +665,6 @@ function SelectableLeads({
               </Button>
             )}
           </div>
-          {findError && (
-            <p role="alert" className="font-mono text-[11px] text-destructive">
-              {findError}
-            </p>
-          )}
-          {!findError && findNote && (
-            <p className="font-mono text-[11px] text-muted-foreground">{findNote}</p>
-          )}
           <LeadsTableView
             rows={noEmail}
             selection={selectionFor(noEmail)}
@@ -422,6 +675,12 @@ function SelectableLeads({
       )}
 
       {viewing && <LeadDetail lead={viewing} onClose={() => setViewing(null)} />}
+
+      <FindEmailsResult
+        open={findOpen}
+        outcome={findResult}
+        onClose={() => setFindOpen(false)}
+      />
     </div>
   );
 }

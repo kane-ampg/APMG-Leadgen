@@ -33,13 +33,13 @@ import { fetchSuppressedEmails, insertPortalEvents } from "@/lib/portal/server";
 //
 // After a live send, one `email_sent` row per recipient is recorded in
 // portal_events (lead_id + campaign + category) — that's what the Telemetry
-// report's "emails sent in period" numbers are built from. Best-effort: a
-// failed insert never fails the send. The telemetry reads are allowlist-based
+// report's "emails sent in period" numbers are built from, AND the gate that
+// puts a lead into the Sales queue (/api/sales/queue reads this ledger
+// directly, so no leads column needs stamping). Best-effort: a failed insert
+// never fails the send, but a lost row also keeps that lead out of the Sales
+// queue until a later send lands. The telemetry reads are allowlist-based
 // (attribution_click/portal_view/…), so these rows never pollute lead trails
 // or funnel totals.
-//
-// TODO(supabase): after a live send, stamp leads.email_sent = true /
-// email_sent_at = now for each recipient so the Sales-queue gate is persisted.
 export const runtime = "nodejs";
 
 /** The send-ledger event name (portal_events). Keep in sync with

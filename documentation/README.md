@@ -18,7 +18,7 @@ This folder documents the Claude Code sessions that built and maintained the **A
   - **Overview** — **role-aware** for admin/client/sales, with KPI cards that read the **live** Supabase `public.leads` data (via `useLeadStats`), a Week/Day/Month auto-cycling histogram, and a recent-leads table.
   - **Pipeline** (admin) — **Leads** (an n8n-style stepped importer that ingests the Bing-scraper CSV, asks "Save leads?", and writes **live** to Supabase, with a realtime stats strip) and **Send Campaigns (Automation)** (tracked HTML outreach via the n8n webhook).
   - **Leads** (admin + client) — a folder browser over the stored Supabase leads (per-upload "folders", multi-select delete, per-lead detail modal).
-  - **Sales** — an `emailSent`-gated queue of qualified leads with contacts + AI briefs, fed by an email **attribution** hook (`/t/[id]`), plus a guided **Closed** flow and a **Closed-deals** tab. *(Sales-stage data is still preset.)*
+  - **Sales** — a paginated queue of every lead admin has emailed (gated on the `email_sent` ledger in `portal_events`, served by `/api/sales/queue`), fed by an email **attribution** hook (`/t/[id]`), plus a guided **Closed** flow and a **Closed-deals** tab. *(Queue data is live; contacted/closed statuses are still session-only.)*
   - **Integrations** (Automate) — an n8n automation registry as a connection bar + card grid.
   - Sidebar navigation (permission-filtered, live Pipeline badge), a dynamic-year footer, and an APMG favicon.
 - **Live vs. pending:** lead storage is **live** on Supabase (real imports confirmed). Still pending: **real auth** on the server routes (service-role key behind a same-origin floor only), persisting attribution/`engaged` + sales-stage data, and a live n8n webhook for campaigns.

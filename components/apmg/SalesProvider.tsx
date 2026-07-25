@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { SALES_LEADS, type SalesLead } from "@/lib/data/sales";
+import { SALES_LEADS, type SalesLead, type SalesStatus } from "@/lib/data/sales";
 import type { SalesQueueResponse, SalesQueueRow } from "@/lib/sales/queue";
 
 export interface CloseDealInput {
@@ -49,6 +49,9 @@ interface SalesContextValue {
   markContacted: (id: string) => void;
   markLost: (id: string) => void;
   closeDeal: (id: string, input: CloseDealInput) => void;
+  /** retract the last status change on a lead — undoes mark-contacted, a close,
+   *  or a lost mark, stepping back one mark at a time */
+  revertStatus: (id: string) => void;
 }
 
 const SalesContext = createContext<SalesContextValue | null>(null);
@@ -103,8 +106,10 @@ function toSalesLead(r: SalesQueueRow): SalesLead {
  *
  * Status changes (contacted / lost / closed) are kept in-memory per lead id —
  * they survive paging back and forth, but not a reload; persisting them is a
- * separate migration. Closing a deal snapshots the full lead into closedDeals
- * so the Closed tab keeps it even after the queue pages away.
+ * separate migration. Every mark is retractable: the status it replaced is
+ * pushed onto a per-lead stack, so revertStatus steps back one mark at a time.
+ * Closing a deal snapshots the full lead into closedDeals so the Closed tab
+ * keeps it even after the queue pages away (a retraction removes it again).
  */
 export function SalesProvider({ children }: { children: ReactNode }) {
   const [rows, setRows] = useState<SalesLead[]>([]);
@@ -116,6 +121,8 @@ export function SalesProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [needsMigration, setNeedsMigration] = useState(false);
   const [overrides, setOverrides] = useState<Record<string, Partial<SalesLead>>>({});
+  // per-lead stack of the statuses each mark replaced — powers revertStatus
+  const [statusHistory, setStatusHistory] = useState<Record<string, SalesStatus[]>>({});
   const [closedDeals, setClosedDeals] = useState<SalesLead[]>([]);
   // increment to refetch the current page; also guards stale responses
   const [reloadTick, setReloadTick] = useState(0);
@@ -189,13 +196,33 @@ export function SalesProvider({ children }: { children: ReactNode }) {
     [rows, overrides],
   );
 
-  const markContacted = useCallback((id: string) => {
-    setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], status: "contacted" } }));
+  /** what a lead is showing right now: its override, else the server/preset row */
+  const statusOf = useCallback(
+    (id: string): SalesStatus =>
+      overrides[id]?.status ?? rows.find((l) => l.id === id)?.status ?? "new",
+    [overrides, rows],
+  );
+
+  /** remember the status a mark replaced, so revertStatus can put it back */
+  const pushStatus = useCallback((id: string, from: SalesStatus) => {
+    setStatusHistory((prev) => ({ ...prev, [id]: [...(prev[id] ?? []), from] }));
   }, []);
 
-  const markLost = useCallback((id: string) => {
-    setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], status: "closed_lost" } }));
-  }, []);
+  const markContacted = useCallback(
+    (id: string) => {
+      pushStatus(id, statusOf(id));
+      setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], status: "contacted" } }));
+    },
+    [pushStatus, statusOf],
+  );
+
+  const markLost = useCallback(
+    (id: string) => {
+      pushStatus(id, statusOf(id));
+      setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], status: "closed_lost" } }));
+    },
+    [pushStatus, statusOf],
+  );
 
   const closeDeal = useCallback(
     (id: string, input: CloseDealInput) => {
@@ -205,6 +232,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
         closedValue: input.value,
         closedAt: shortDate(),
       };
+      pushStatus(id, statusOf(id));
       setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
       // snapshot for the Closed-deals tab so it survives paging away
       const lead = rows.find((l) => l.id === id);
@@ -212,7 +240,36 @@ export function SalesProvider({ children }: { children: ReactNode }) {
         setClosedDeals((prev) => [{ ...lead, ...patch }, ...prev.filter((l) => l.id !== id)]);
       }
     },
-    [rows],
+    [rows, pushStatus, statusOf],
+  );
+
+  const revertStatus = useCallback(
+    (id: string) => {
+      const stack = statusHistory[id] ?? [];
+      // nothing recorded (e.g. a preset that arrived already closed) → back to new
+      const back: SalesStatus = stack.length ? stack[stack.length - 1] : "new";
+      setStatusHistory((prev) => {
+        const rest = (prev[id] ?? []).slice(0, -1);
+        const next = { ...prev };
+        if (rest.length) next[id] = rest;
+        else delete next[id];
+        return next;
+      });
+      setOverrides((prev) => ({
+        ...prev,
+        [id]: {
+          ...prev[id],
+          status: back,
+          // reopening a deal drops the close snapshot with it
+          closedNote: undefined,
+          closedValue: undefined,
+          closedAt: undefined,
+        },
+      }));
+      // no longer won — pull it back out of the Closed-deals tab
+      setClosedDeals((prev) => prev.filter((l) => l.id !== id));
+    },
+    [statusHistory],
   );
 
   const stats = useMemo<SalesStats>(() => {
@@ -252,6 +309,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       markContacted,
       markLost,
       closeDeal,
+      revertStatus,
     }),
     [
       leads,
@@ -269,6 +327,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       markContacted,
       markLost,
       closeDeal,
+      revertStatus,
     ],
   );
 

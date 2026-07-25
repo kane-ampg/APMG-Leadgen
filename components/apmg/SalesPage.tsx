@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Sparkles,
   Star,
+  Undo2,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
@@ -73,16 +74,42 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
   );
 }
 
+/** Small ghost button used for the retract ("undo this mark") actions. */
+function RevertButton({
+  label,
+  leadId,
+  onRevert,
+}: {
+  label: string;
+  leadId: string;
+  onRevert: (id: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onRevert(leadId)}
+      data-track="lead_revert_status"
+      data-track-lead={leadId}
+      className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+    >
+      <Undo2 className="h-3.5 w-3.5" aria-hidden />
+      {label}
+    </button>
+  );
+}
+
 function LeadCard({
   lead,
   onContacted,
   onLost,
   onRequestClose,
+  onRevert,
 }: {
   lead: SalesLead;
   onContacted: (id: string) => void;
   onLost: (id: string) => void;
   onRequestClose: (id: string) => void;
+  onRevert: (id: string) => void;
 }) {
   const hot = (lead.score ?? 0) >= 85;
   const closed = lead.status === "closed_won" || lead.status === "closed_lost";
@@ -233,7 +260,7 @@ function LeadCard({
         {!closed && (
           <div className="ml-auto flex items-center gap-1.5">
             <Can perm="leads.contact">
-              {lead.status === "new" && (
+              {lead.status === "new" ? (
                 <button
                   type="button"
                   onClick={() => onContacted(lead.id)}
@@ -244,6 +271,9 @@ function LeadCard({
                   <Phone className="h-3.5 w-3.5" aria-hidden />
                   Mark contacted
                 </button>
+              ) : (
+                // marked contacted by mistake — put it back in New
+                <RevertButton label="Undo contacted" leadId={lead.id} onRevert={onRevert} />
               )}
             </Can>
             <Can perm="leads.close">
@@ -270,11 +300,23 @@ function LeadCard({
             </Can>
           </div>
         )}
-        {lead.status === "closed_won" && (
-          <span className="ml-auto inline-flex items-center gap-1 font-mono text-[11px] text-primary">
-            <CircleCheck className="h-3.5 w-3.5" aria-hidden />
-            Closed{lead.assignedRep ? ` by ${lead.assignedRep}` : ""}
-          </span>
+        {closed && (
+          <div className="ml-auto flex items-center gap-2">
+            {lead.status === "closed_won" && (
+              <span className="inline-flex items-center gap-1 font-mono text-[11px] text-primary">
+                <CircleCheck className="h-3.5 w-3.5" aria-hidden />
+                Closed{lead.assignedRep ? ` by ${lead.assignedRep}` : ""}
+              </span>
+            )}
+            {/* retract the close / lost mark and hand the lead back to the queue */}
+            <Can perm="leads.close">
+              <RevertButton
+                label={lead.status === "closed_won" ? "Reopen" : "Undo lost"}
+                leadId={lead.id}
+                onRevert={onRevert}
+              />
+            </Can>
+          </div>
         )}
       </div>
     </div>
@@ -309,6 +351,7 @@ export function SalesPage() {
     markContacted,
     markLost,
     closeDeal,
+    revertStatus,
   } = useSales();
   const [filter, setFilter] = useState<SalesStatus | "all">("all");
   const [closingId, setClosingId] = useState<string | null>(null);
@@ -422,6 +465,7 @@ export function SalesPage() {
                 onContacted={markContacted}
                 onLost={markLost}
                 onRequestClose={setClosingId}
+                onRevert={revertStatus}
               />
             </Reveal>
           ))}

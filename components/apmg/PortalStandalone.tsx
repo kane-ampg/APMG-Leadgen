@@ -2,7 +2,6 @@
 
 import { useEffect } from "react";
 import { useClickTelemetry } from "@/lib/telemetry";
-import { PortalConsentGate } from "./PortalConsentGate";
 import { ServicesPortal } from "./ServicesPortal";
 
 /**
@@ -34,19 +33,18 @@ export function PortalStandalone() {
   }, []);
 
   return (
-    // PortalConsentGate wraps ONLY the public host: it presents the current
-    // Terms & Privacy Policy in an acknowledge-to-view modal before the visitor
-    // explores the page (re-prompting only when the published version bumps).
-    // The internal "Our Services" tab mounts ServicesPortal directly, so it is
-    // never gated. This is informational — the authoritative, fail-closed
-    // consent is still recorded at enquiry time by ServiceInquiryModal.
-    <PortalConsentGate>
-      <div className="h-dvh max-h-dvh overflow-y-auto overflow-x-hidden bg-background text-foreground">
-        {/* `standalone` marks this as the CUSTOMER host: only here do the
-            portal_view / portal_service_open contract events fire (the internal
-            Our Services tab must not pollute the Enquiries funnel). */}
-        <ServicesPortal standalone />
-      </div>
-    </PortalConsentGate>
+    // NO entry gate: a cold visitor arriving from an outreach email must see
+    // the services page immediately — a full-screen legal modal before any
+    // value is shown reads as a dark pattern and kills trust. The policies are
+    // one click away (footer → /portal/terms, /portal/privacy), and the
+    // authoritative, fail-closed consent is still recorded at enquiry time by
+    // ServiceInquiryModal (PortalConsentGate is kept in the repo, unmounted,
+    // should an acknowledge-to-view gate ever be required contractually).
+    <div className="h-dvh max-h-dvh overflow-y-auto overflow-x-hidden bg-background text-foreground">
+      {/* `standalone` marks this as the CUSTOMER host: only here do the
+          portal_view / portal_service_open contract events fire (the internal
+          Our Services tab must not pollute the Enquiries funnel). */}
+      <ServicesPortal standalone />
+    </div>
   );
 }

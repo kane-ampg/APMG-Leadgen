@@ -1,7 +1,8 @@
 "use client";
 
-import { Globe, Mail, NotebookPen, Phone, Star } from "lucide-react";
+import { Globe, Mail, NotebookPen, Phone, Star, Undo2 } from "lucide-react";
 import { formatUsd } from "@/lib/format";
+import { Can } from "@/components/rbac/Can";
 import { useSales } from "./SalesProvider";
 import { Footer } from "./Footer";
 import { Reveal } from "./Reveal";
@@ -26,7 +27,7 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
 }
 
 export function ClosedDealsPage() {
-  const { closedDeals } = useSales();
+  const { closedDeals, revertStatus } = useSales();
   const total = closedDeals.reduce((sum, l) => sum + (l.closedValue ?? l.dealValue ?? 0), 0);
   const avg = closedDeals.length ? Math.round(total / closedDeals.length) : 0;
 
@@ -158,6 +159,20 @@ export function ClosedDealsPage() {
                       <span className="text-foreground/80">{lead.assignedRep}</span>
                     </>
                   )}
+                  {/* closed by mistake — hand it back to the sales queue */}
+                  <Can perm="leads.close">
+                    <button
+                      type="button"
+                      onClick={() => revertStatus(lead.id)}
+                      aria-label={`Reopen ${lead.business}`}
+                      data-track="closed_reopen"
+                      data-track-lead={lead.id}
+                      className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                    >
+                      <Undo2 className="h-3.5 w-3.5" aria-hidden />
+                      Reopen
+                    </button>
+                  </Can>
                 </div>
               </div>
             </Reveal>

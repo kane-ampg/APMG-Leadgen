@@ -15,6 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { type Permission } from "@/lib/rbac/permissions";
+import { type Role } from "@/lib/rbac/roles";
 
 export type TabId =
   | "services"
@@ -102,6 +103,23 @@ export function firstAllowedTab(can: (perm: Permission) => boolean): TabId {
   return "overview";
 }
 
+/**
+ * Where each role lands after sign-in. Admins (and clients) open the console
+ * Overview; sales reps go straight to their queue instead of a dashboard they
+ * don't work out of.
+ */
+export const ROLE_LANDING_TAB: Record<Role, TabId> = {
+  admin: "overview",
+  client: "overview",
+  sales: "sales",
+};
+
+/** The role's home tab, falling back to the first tab it may open. */
+export function landingTab(role: Role, can: (perm: Permission) => boolean): TabId {
+  const home = ROLE_LANDING_TAB[role];
+  return home && can(TAB_PERMISSION[home]) ? home : firstAllowedTab(can);
+}
+
 export const TAB_LABEL: Record<TabId, string> = {
   services: "Our Services",
   overview: "Overview",
@@ -117,3 +135,14 @@ export const TAB_LABEL: Record<TabId, string> = {
   telemetry: "Telemetry",
   settings: "Settings",
 };
+
+/** Brand suffix for browser tab titles. */
+export const APP_NAME = "APMG Lead Gen";
+
+/**
+ * Browser tab title for a surface. The page name leads so it survives the
+ * truncation a narrow browser tab applies to the end of the string.
+ */
+export function tabTitle(tab: TabId): string {
+  return `${TAB_LABEL[tab]} — ${APP_NAME}`;
+}

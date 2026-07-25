@@ -5,22 +5,29 @@ import Image, { type StaticImageData } from "next/image";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowRight,
+  BadgeCheck,
   Briefcase,
   Droplets,
   Globe,
   Hammer,
   Layers,
+  Mail,
   MapPin,
   MessageSquare,
   Paintbrush,
+  Phone,
   ShieldCheck,
   Sprout,
+  Star,
   Users,
   Wrench,
   Zap,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { COMPANY } from "@/lib/legal/company";
+import { WhatsAppIcon } from "./WhatsAppIcon";
+import { GoogleReviewsPanel } from "./GoogleReviewsPanel";
 import heroBg from "@/app/apmgbg.jpg";
 import heroTeam from "@/app/apmgteam.jpg";
 import brandLogo from "@/app/icon.png";
@@ -71,20 +78,29 @@ import { TeamSection } from "./TeamSection";
  * internal opens are tagged `services_card_open` instead (summary ignores it).
  */
 
-/** In-page tabs for the portal body. Order is the pill order. */
+/** In-page tabs for the portal body. Order is the pill order — Google Reviews
+ *  sits directly beside Our Services (third-party proof next to the pitch). */
 const PORTAL_TABS = [
   { key: "services", label: "Our Services", icon: Briefcase },
+  { key: "reviews", label: "Google Reviews", icon: Star },
   { key: "team", label: "Our Team", icon: Users },
 ] as const;
 type PortalTab = (typeof PORTAL_TABS)[number]["key"];
 
 /** Hero title + subtitle per tab — swapped (cross-faded) with the background
- *  image so the whole hero reflects the active section, not just the photo. */
+ *  image so the whole hero reflects the active section, not just the photo.
+ *  Copy rule (Company-Brief): checkable facts, not self-assertions — "trusted"
+ *  is for the visitor to conclude, "family-run since 2015" is for us to say. */
 const HERO_COPY: Record<PortalTab, { title: string; subtitle: string }> = {
   services: {
     title: "Our Services",
     subtitle:
-      "Everything your property needs, looked after by one trusted team. Pick a trade below and we’ll take it from there.",
+      "Melbourne property maintenance across eight trades — one team, one point of contact. Family-run since 2015.",
+  },
+  reviews: {
+    title: "Google Reviews",
+    subtitle:
+      "Don’t take our word for it — read what the people we work for say about us, straight from Google.",
   },
   team: {
     title: "Our Team",
@@ -92,6 +108,38 @@ const HERO_COPY: Record<PortalTab, { title: string; subtitle: string }> = {
       "The people who’ll actually look after your property — the same faces you’ll deal with from the first call to the job done.",
   },
 };
+
+/**
+ * PROOF BAND — the facts a cold visitor can check, shown right under the hero.
+ * Every line here must be substantiated (knowledgebase/business.md); adjectives
+ * don't build trust with facility managers, verifiable claims do.
+ *
+ * TODO(trust): the highest-value additions are still waiting on documentation —
+ * public liability insurance (amount), trade licence numbers, police checks /
+ * WWCC policy, and the ABN. Add each line the day the certificate is in hand;
+ * never before (Company-Brief: no unsupported claims).
+ */
+const PROOF_POINTS = [
+  "Family-run since 2015",
+  "Licensed, multi-trade professionals",
+  "Melbourne & Victoria-wide",
+  "Reactive & preventative maintenance",
+  "One partner for every trade",
+] as const;
+
+/**
+ * Sector line for the hero (message-match with the outreach email). The lead's
+ * category arrives from /api/portal/context (resolved from the httpOnly
+ * attribution cookie — category only, nothing identifying). The copy is a
+ * template over the category so new sectors need no code change; the sectors
+ * we target are all in the KB's "Sectors served" list, so the claim is
+ * grounded. Null (no cookie / direct visit / demo) → no line, generic hero.
+ */
+function sectorLine(category: string): string {
+  const c = category.trim();
+  if (!c) return "";
+  return `We support ${c.charAt(0).toLowerCase()}${c.slice(1)} sites across Melbourne — with minimal disruption to your daily operations.`;
+}
 
 /** Directional crossfade for the tab panels (§11.1): slide toward the pill the
  *  visitor moved to. `dir` +1 = forward (services→team), −1 = back. */
@@ -123,61 +171,64 @@ const GENERAL_SERVICE: Service = {
   icon: MessageSquare,
 };
 
-/** Services from the APMG site — "Melbourne" trimmed, copy warmed up. */
+/** Services from the APMG site. Blurb rule (Company-Brief: avoid exaggeration,
+ *  avoid overpromising): describe the work, not superlatives — "flawless",
+ *  "perfection" and unbacked speed promises are trust-negative with facility
+ *  managers, who've heard them from every contractor that later let them down. */
 const SERVICES: Service[] = [
   {
     slug: "electrical",
     name: "Electrical Services",
-    blurb: "Safe, certified electrical work — from new power points to full rewires.",
+    blurb: "Safe, licensed electrical work — from new power points to full rewires.",
     icon: Zap,
     photo: photoElectrical,
   },
   {
     slug: "painting",
     name: "Painting Services",
-    blurb: "Fresh, flawless finishes inside and out, applied with real care.",
+    blurb: "Interior and exterior painting, prepared properly and finished with care.",
     icon: Paintbrush,
     photo: photoPainting,
   },
   {
     slug: "plumbing",
     name: "Plumbing Services",
-    blurb: "Leaks, installs and emergencies sorted fast — and right the first time.",
+    blurb: "Leaks, blocked drains, installs and urgent repairs — handled properly.",
     icon: Droplets,
     photo: photoPlumbing,
   },
   {
     slug: "carpentry",
     name: "Carpentry & Joinery",
-    blurb: "Custom-built and expertly repaired timberwork, made to last.",
+    blurb: "Repairs, installations and custom timberwork — doors, frames, cabinetry.",
     icon: Hammer,
     photo: photoCarpentry,
   },
   {
     slug: "flooring",
     name: "Flooring Services",
-    blurb: "Timber, tile, vinyl and carpet — laid to perfection.",
+    blurb: "Timber, vinyl, laminate and carpet — repairs, replacement and new floors.",
     icon: Layers,
     photo: photoFlooring,
   },
   {
     slug: "gardening",
     name: "Gardening & Grounds Maintenance",
-    blurb: "Lawns, gardens and grounds kept looking their very best.",
+    blurb: "Lawns, gardens and grounds kept safe, tidy and presentable.",
     icon: Sprout,
     photo: photoGardening,
   },
   {
     slug: "handyman",
     name: "Handyman Services",
-    blurb: "The odd jobs and quick fixes — all handled in a single call.",
+    blurb: "The odd jobs and small repairs — all handled in a single call.",
     icon: Wrench,
     photo: photoHandyman,
   },
   {
     slug: "make-safe",
     name: "Property Make Safe Services",
-    blurb: "Rapid make-safe and securing after storm damage or a break-in.",
+    blurb: "Securing and making sites safe after storm damage, faults or break-ins.",
     icon: ShieldCheck,
     photo: photoMakeSafe,
   },
@@ -190,6 +241,9 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
   /** Active in-page tab + the direction of the last switch (for the slide). */
   const [tab, setTab] = useState<PortalTab>("services");
   const [dir, setDir] = useState(1);
+  /** Attributed sector (lead category) for the hero's message-match line —
+   *  null until /api/portal/context resolves (or forever, on a direct visit). */
+  const [sector, setSector] = useState<string | null>(null);
   /** Contract funnel events fire ONLY on the customer-facing /portal host;
    *  internal (dashboard) opens get a non-contract name the summary ignores. */
   const openEvent = standalone ? "portal_service_open" : "services_card_open";
@@ -213,6 +267,29 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
     if (standalone) track("portal_view");
   }, [standalone]);
 
+  // Message-match: resolve the visitor's attributed sector (customer host
+  // only). The outreach email spoke their sector's language — the landing page
+  // greeting the same sector is what makes the email feel personal instead of
+  // templated. Best-effort: any miss just leaves the generic hero.
+  useEffect(() => {
+    if (!standalone) return;
+    let cancelled = false;
+    fetch("/api/portal/context")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { ok?: boolean; category?: string | null } | null) => {
+        if (cancelled || !j?.ok) return;
+        if (typeof j.category === "string" && j.category.trim()) {
+          setSector(j.category.trim());
+        }
+      })
+      .catch(() => {
+        /* no attribution / offline — generic hero */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [standalone]);
+
   return (
     // Centred, max-width column so the portal reads as a contained page rather
     // than sprawling edge-to-edge on wide screens (keeps the hero from
@@ -222,13 +299,16 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
       <Reveal y={6}>
         <section className="relative h-[300px] overflow-hidden rounded-2xl bg-black ring-1 ring-foreground/10 sm:h-[360px]">
           {/* Two hero images stacked, cross-fading on tab change: the depot/fleet
-              shot for Services, the team line-up for Our Team. Both show the WHOLE
-              image uncropped (object-contain); wherever it doesn't fill the box,
-              the section's bg-black shows through as a letterbox bar. The bottom
-              scrim keeps the logo + copy legible over either. */}
+              shot for Services, the team line-up for Our Team. object-COVER fills
+              the hero frame edge-to-edge (black letterbox bars made the page open
+              on what looked like a placeholder). The bottom scrim keeps the logo
+              + copy legible over either. */}
           {(
             [
               { key: "services", src: heroBg },
+              // Reviews reuses the depot shot — services→reviews cross-fades
+              // between identical frames, i.e. reads as a still hero.
+              { key: "reviews", src: heroBg },
               { key: "team", src: heroTeam },
             ] as const
           ).map((layer) => (
@@ -247,7 +327,7 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
                 priority={layer.key === "services"}
                 sizes="(min-width: 896px) 896px, 100vw"
                 placeholder="blur"
-                className="object-contain object-center"
+                className="object-cover object-center"
               />
             </motion.div>
           ))}
@@ -297,21 +377,67 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
                   <p className="mt-2 max-w-xl text-xs leading-relaxed text-white/85 sm:mt-3 sm:text-base">
                     {HERO_COPY[tab].subtitle}
                   </p>
+                  {/* Sector message-match line — only when the visitor arrived
+                      from a sector-targeted outreach link. */}
+                  {sector && tab === "services" && (
+                    <p className="mt-1.5 max-w-xl text-[11px] leading-relaxed text-white/70 sm:text-sm">
+                      {sectorLine(sector)}
+                    </p>
+                  )}
                 </motion.div>
               </AnimatePresence>
             </div>
-            <button
-              type="button"
-              onClick={() => setActive(GENERAL_SERVICE)}
-              data-track={openEvent}
-              data-track-service="general"
-              className="mt-1 inline-flex w-fit items-center gap-1.5 rounded-md bg-white/95 px-3.5 py-2 text-xs font-semibold text-zinc-900 shadow-sm transition-[transform,background-color] hover:bg-white active:translate-y-px"
-            >
-              Talk to our team
-              <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-            </button>
+            {/* CTA row: the enquiry path AND the phone, side by side. Property
+                maintenance demand is often urgent — a contact surface without a
+                visible phone number reads as a lead-capture farm, and half the
+                real enquiries would rather call anyway. */}
+            <div className="mt-1 flex flex-wrap items-center gap-2.5">
+              <button
+                type="button"
+                onClick={() => setActive(GENERAL_SERVICE)}
+                data-track={openEvent}
+                data-track-service="general"
+                className="inline-flex w-fit items-center gap-1.5 rounded-md bg-white/95 px-3.5 py-2 text-xs font-semibold text-zinc-900 shadow-sm transition-[transform,background-color] hover:bg-white active:translate-y-px"
+              >
+                Get a quote
+                <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+              </button>
+              {/* WhatsApp deep link (not tel:) — opens a chat with the number,
+                  pre-filled so the visitor's first message costs zero typing.
+                  WhatsApp brand green (#25D366): the one place a non-token hue
+                  is allowed, because instant brand recognition IS the point.
+                  Calling stays available via the contact card + footer tel:. */}
+              <a
+                href={`${COMPANY.whatsappHref}?text=${encodeURIComponent(
+                  "Hi APMG Services, I'd like a quote for some property maintenance work.",
+                )}`}
+                target="_blank"
+                rel="noreferrer"
+                data-track="portal_whatsapp_click"
+                className="inline-flex w-fit items-center gap-1.5 rounded-md bg-[#25D366] px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition-[transform,filter] hover:brightness-105 active:translate-y-px"
+              >
+                <WhatsAppIcon className="h-3.5 w-3.5" />
+                {COMPANY.phone}
+              </a>
+            </div>
           </div>
         </section>
+      </Reveal>
+
+      {/* ── Proof band: checkable facts, right where the eye lands after the
+          hero. See PROOF_POINTS for the substantiation rule. ─────────────── */}
+      <Reveal delay={0.04} className="mt-4">
+        <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2 rounded-xl bg-card px-4 py-3 ring-1 ring-foreground/10 sm:justify-between sm:px-5">
+          {PROOF_POINTS.map((point) => (
+            <span
+              key={point}
+              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground sm:text-xs"
+            >
+              <BadgeCheck className="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden />
+              {point}
+            </span>
+          ))}
+        </div>
       </Reveal>
 
       {/* ── In-page tabs (§11.1 sliding-pill) ────────────────────────────── */}
@@ -359,6 +485,8 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
                 onOpen={setActive}
                 openEvent={openEvent}
               />
+            ) : tab === "reviews" ? (
+              <GoogleReviewsPanel />
             ) : (
               <TeamSection />
             )}
@@ -473,7 +601,37 @@ function ServicesPanel({
         ))}
       </div>
 
-      {/* Where to find us */}
+      {/* ── Common questions — answers the objections a cold visitor actually
+          arrives with (Company-Brief "Key Client Pain Points"). Every answer
+          is grounded in the KB; nothing invented (no response-time promises,
+          no certifications we can't show). ─────────────────────────────── */}
+      <Reveal delay={0.12} className="mt-8">
+        <div className="mb-4">
+          <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+            Good to know
+          </div>
+          <h2 className="mt-1.5 font-heading text-lg font-semibold tracking-tight text-foreground">
+            Common questions
+          </h2>
+        </div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {FAQ.map((item) => (
+            <div
+              key={item.q}
+              className="rounded-xl bg-card p-4 ring-1 ring-foreground/10"
+            >
+              <h3 className="font-heading text-sm font-semibold text-foreground">
+                {item.q}
+              </h3>
+              <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                {item.a}
+              </p>
+            </div>
+          ))}
+        </div>
+      </Reveal>
+
+      {/* Contact — every way to reach us, not just the form. */}
       <Reveal delay={0.14} className="mt-4">
         <div className="flex flex-col gap-3 rounded-xl bg-card p-5 ring-1 ring-foreground/10 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
@@ -482,28 +640,76 @@ function ServicesPanel({
             </span>
             <div>
               <h3 className="font-heading text-sm font-semibold text-foreground">
-                APMG Services
+                {COMPANY.tradingName}
               </h3>
               <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                1 Tesmar Cct, Chirnside Park, VIC, Australia
+                {COMPANY.address}
               </p>
             </div>
           </div>
-          <a
-            href="https://www.apmgservices.com.au/"
-            target="_blank"
-            rel="noreferrer"
-            data-track="portal_website_click"
-            className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
-          >
-            <Globe className="h-3.5 w-3.5" aria-hidden />
-            apmgservices.com.au
-          </a>
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <a
+              href={COMPANY.phoneHref}
+              data-track="portal_phone_click"
+              className="inline-flex shrink-0 items-center gap-1.5 text-xs font-semibold text-foreground transition-colors hover:text-primary"
+            >
+              <Phone className="h-3.5 w-3.5 text-primary" aria-hidden />
+              {COMPANY.phone}
+            </a>
+            <a
+              href={`mailto:${COMPANY.contactEmail}`}
+              data-track="portal_email_click"
+              className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
+            >
+              <Mail className="h-3.5 w-3.5" aria-hidden />
+              {COMPANY.contactEmail}
+            </a>
+            <a
+              href={COMPANY.website}
+              target="_blank"
+              rel="noreferrer"
+              data-track="portal_website_click"
+              className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-primary"
+            >
+              <Globe className="h-3.5 w-3.5" aria-hidden />
+              apmgservices.com.au
+            </a>
+          </div>
         </div>
       </Reveal>
     </div>
   );
 }
+
+/** KB-grounded FAQ (knowledgebase/business.md + Company-Brief). The rule:
+ *  answer honestly from what's documented, never promise what isn't — a
+ *  specific kept commitment beats a vague strong one. */
+const FAQ = [
+  {
+    q: "Can one team really handle multiple trades on the same job?",
+    a: "Yes — painting, electrical, plumbing, carpentry, flooring, gardening, handyman and make-safe works are all delivered in-house. You deal with one point of contact instead of coordinating separate contractors.",
+  },
+  {
+    q: "Do you handle urgent repairs?",
+    a: `We provide reactive, on-call repairs and property make-safe services. If something needs attention urgently, call us on ${COMPANY.phone} rather than waiting on the form.`,
+  },
+  {
+    q: "Do you do scheduled and preventative maintenance?",
+    a: "Yes — alongside reactive repairs we run planned, preventative maintenance programs, from routine upkeep through to larger upgrade works.",
+  },
+  {
+    q: "Where do you work?",
+    a: "We're based in Chirnside Park and service properties across Melbourne and Victoria — commercial, industrial and residential, including aged care, childcare, education, strata and government sites.",
+  },
+  {
+    q: "What happens after I enquire?",
+    a: "One of our team reviews your enquiry and contacts you to understand the job, then arranges a time to inspect and quote. The same point of contact stays with the job through to completion.",
+  },
+  {
+    q: "Do you work around residents, staff and operating hours?",
+    a: "Yes — we plan works to minimise disruption to the people using the site, which matters most in aged care, childcare, education and healthcare environments.",
+  },
+] as const;
 
 function ServiceCard({
   service,
@@ -540,11 +746,12 @@ function ServiceCard({
       className="group relative flex h-full w-full flex-col overflow-hidden rounded-xl bg-card text-left ring-1 ring-foreground/10 transition-colors hover:ring-primary/40"
     >
       {/* Photo banner. Fixed 16:9 box so every card's image reads at the same
-          height regardless of the source photo. object-CONTAIN shows the WHOLE
-          photo uncropped — nothing is cut off — with the box's bg-muted acting
-          as a matte wherever a photo's ratio doesn't exactly fill 16:9 (same
-          letterbox approach the hero uses). The subtle zoom on hover echoes the
-          card lift; a faint bottom gradient seats the overlapping icon chip. */}
+          height regardless of the source photo. object-COVER fills the frame —
+          matte bars around a letterboxed photo read as placeholder content,
+          and these job-site shots of the crew in branded workwear are the
+          strongest trust asset on the page, so they get the full frame. The
+          subtle zoom on hover echoes the card lift; a faint bottom gradient
+          seats the overlapping icon chip. */}
       <div className="relative aspect-video w-full overflow-hidden bg-muted">
         {service.photo ? (
           <Image
@@ -554,7 +761,7 @@ function ServiceCard({
             placeholder="blur"
             sizes="(min-width: 1024px) 25vw, (min-width: 640px) 50vw, 100vw"
             className={cn(
-              "object-contain object-center",
+              "object-cover object-center",
               !reduce && "transition-transform duration-500 group-hover:scale-105",
             )}
           />

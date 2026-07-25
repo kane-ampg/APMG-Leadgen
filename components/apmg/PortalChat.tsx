@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { MessageCircle, X, Send, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { track } from "@/lib/telemetry";
+import { COMPANY } from "@/lib/legal/company";
 import { MAX_MESSAGE_CHARS, MAX_HISTORY_MESSAGES } from "@/lib/portal/chatLimits";
 
 /**
@@ -13,10 +14,13 @@ import { MAX_MESSAGE_CHARS, MAX_HISTORY_MESSAGES } from "@/lib/portal/chatLimits
  * appears inside the internal dashboard's "Our Services" tab.
  *
  * Behaviour:
- *  - AUTO-OPENS once, 3 seconds after the visitor lands (they arrived from an
- *    outreach email, so a gentle prompt is welcome) — unless they've already
- *    opened/closed it this session (sessionStorage) or prefers-reduced-motion is
- *    set, in which case we don't spring it on them.
+ *  - AUTO-OPENS once, 30 seconds after the visitor lands — long enough that
+ *    they've read the page first. (Was 3s: a cold outreach recipient hit a
+ *    consent modal, then a chat popup, before reading a single service — two
+ *    interruptions that read as spam, not help.) Skipped if they've already
+ *    opened/closed it this session (sessionStorage).
+ *  - HONESTY: the panel is labelled as an automated assistant (never passed
+ *    off as a person) and always offers the phone number as the human path.
  *  - Talks to /api/portal/chat, which is KB-grounded, rate-limited, and spends a
  *    walled-off key (see the route). The client keeps only the last few turns and
  *    caps input length to match the server's guardrails.
@@ -27,7 +31,7 @@ import { MAX_MESSAGE_CHARS, MAX_HISTORY_MESSAGES } from "@/lib/portal/chatLimits
  */
 
 const EASE = [0.16, 1, 0.3, 1] as const;
-const AUTO_OPEN_MS = 3000;
+const AUTO_OPEN_MS = 30_000;
 /** Once per browser session: don't re-spring the panel after the visitor has
  *  engaged with it. */
 const SEEN_KEY = "apmg-portal-chat-seen";
@@ -36,8 +40,7 @@ type Msg = { role: "user" | "assistant"; content: string };
 
 const GREETING: Msg = {
   role: "assistant",
-  content:
-    "Hi! I'm the APMG assistant 👋 Ask me anything about our property maintenance services, or tap “Enquire” on a service to reach the team.",
+  content: `Hi! I'm APMG's automated assistant 👋 I can answer questions about our property maintenance services. Prefer a person? Call us on ${COMPANY.phone}, or tap “Enquire” on any service and the team will get back to you.`,
 };
 
 export function PortalChat() {
@@ -160,8 +163,12 @@ export function PortalChat() {
               </span>
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-semibold leading-tight">APMG Assistant</p>
+                {/* Honest label: never let a customer mistake the bot for a person. */}
                 <p className="truncate text-[11px] leading-tight text-primary-foreground/80">
-                  Ask about our services
+                  Automated · or call{" "}
+                  <a href={COMPANY.phoneHref} className="font-semibold underline underline-offset-2">
+                    {COMPANY.phone}
+                  </a>
                 </p>
               </div>
               <button

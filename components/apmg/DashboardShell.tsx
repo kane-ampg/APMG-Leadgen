@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { firstAllowedTab, TAB_LABEL, TAB_PERMISSION, type TabId } from "@/lib/nav";
+import { landingTab, TAB_LABEL, TAB_PERMISSION, tabTitle, type TabId } from "@/lib/nav";
 import { useClickTelemetry } from "@/lib/telemetry";
 import { useRbac } from "@/lib/rbac/RbacProvider";
 import { type AppUser } from "@/lib/auth/users";
@@ -31,16 +31,25 @@ import { TelemetryPage } from "./TelemetryPage";
  */
 export function DashboardShell({ user }: { user?: AppUser }) {
   const reduce = useReducedMotion();
-  const [activeTab, setActiveTab] = useState<TabId>("overview");
+  const { can, role } = useRbac();
+  // Open on the signed-in role's home surface: admins get the console
+  // Overview, sales reps their queue (lib/nav ROLE_LANDING_TAB).
+  const [activeTab, setActiveTab] = useState<TabId>(() => landingTab(role, can));
   const [navOpen, setNavOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const { can } = useRbac();
-  const fallbackTab = useMemo(() => firstAllowedTab(can), [can]);
+  const fallbackTab = useMemo(() => landingTab(role, can), [role, can]);
 
   // Keep the active tab within what the current role is permitted to open.
   useEffect(() => {
     if (!can(TAB_PERMISSION[activeTab])) setActiveTab(fallbackTab);
   }, [can, activeTab, fallbackTab]);
+
+  // Name the browser tab after the surface that's open. The console is a
+  // single route with client-side tabs, so Next's static `metadata` can't do
+  // this — the title is set imperatively on each switch instead.
+  useEffect(() => {
+    document.title = tabTitle(activeTab);
+  }, [activeTab]);
 
   // Attach the delegated click-telemetry listener for the active view.
   useClickTelemetry(activeTab);

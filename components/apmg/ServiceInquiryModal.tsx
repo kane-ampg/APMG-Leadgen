@@ -333,10 +333,21 @@ export function ServiceInquiryModal({
                     <CircleCheck className="h-6 w-6" aria-hidden />
                   </motion.div>
                   <h3 className="mt-3 font-heading text-base font-semibold text-foreground">
-                    Enquiry sent
+                    Enquiry received
                   </h3>
+                  {/* Copy rule (Company-Brief): never promise a response time
+                      without an agreement in place. Instead: name the process
+                      and give an urgent path that doesn't depend on our queue. */}
                   <p className="mt-1 max-w-sm text-xs leading-relaxed text-muted-foreground">
-                    Thanks — our team will be in touch within one business day.
+                    Thanks — one of our team will be in touch to understand the
+                    job and arrange a quote. If it&rsquo;s urgent, call us on{" "}
+                    <a
+                      href={COMPANY.phoneHref}
+                      className="font-semibold text-primary underline underline-offset-2"
+                    >
+                      {COMPANY.phone}
+                    </a>
+                    .
                   </p>
                   <Button
                     ref={doneRef}
@@ -361,6 +372,25 @@ export function ServiceInquiryModal({
                 >
                   {/* body — capped height so the modal survives short viewports */}
                   <div className="max-h-[min(62vh,540px)] space-y-4 overflow-y-auto px-5 py-4">
+                    {/* What happens next — a form is an anxious hand-off to a
+                        stranger; naming the process (Company-Brief: "poor
+                        follow-up after quoting" is a top client pain point)
+                        turns it into a known one. No response-time promises. */}
+                    <ol className="flex flex-col gap-1 rounded-lg bg-muted/40 p-3 text-[11px] leading-relaxed text-muted-foreground sm:flex-row sm:gap-4">
+                      {[
+                        "We call or email to understand the job",
+                        "We arrange a time to inspect and quote",
+                        "One point of contact through to completion",
+                      ].map((step, i) => (
+                        <li key={step} className="flex items-start gap-1.5 sm:flex-1">
+                          <span className="mt-px font-mono text-[10px] font-semibold text-primary">
+                            {i + 1}.
+                          </span>
+                          {step}
+                        </li>
+                      ))}
+                    </ol>
+
                     <div className="space-y-1.5">
                       <label
                         htmlFor="enquiry-name"
@@ -623,11 +653,10 @@ export function ServiceInquiryModal({
                     fill
                     placeholder="blur"
                     sizes="400px"
-                    // object-CONTAIN so the whole job-site photo is visible on
-                    // the book's right page — never cropped. The landscape photo
-                    // sits centred in the taller panel with bg-muted matting
-                    // above/below, matching the card banners and the hero.
-                    className="object-contain object-center"
+                    // object-COVER fills the book's right page edge-to-edge —
+                    // matte bars around a letterboxed photo read as placeholder
+                    // content, matching the card banners and the hero.
+                    className="object-cover object-center"
                   />
                   {/* bottom scrim so the caption stays legible over any photo */}
                   <span

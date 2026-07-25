@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowLeft,
@@ -10,6 +10,8 @@ import {
   Database,
   Folder,
   Globe,
+  Mail,
+  MailX,
   Pencil,
   RefreshCw,
   Search,
@@ -362,6 +364,66 @@ function AllLeadsView({
 
 /* ─────────────────────────  selectable table (shared)  ───────────────────── */
 
+// §11.1 directional slide for the With email / No email tab panels
+const TAB_PANEL_VARIANTS = {
+  enter: (dir: number) => ({ opacity: 0, x: dir >= 0 ? 28 : -28 }),
+  center: { opacity: 1, x: 0 },
+  exit: (dir: number) => ({ opacity: 0, x: dir >= 0 ? -28 : 28 }),
+};
+
+/** One With email / No email pill (§11.1 sliding-indicator tabs). */
+function EmailTabPill({
+  layoutId,
+  active,
+  reduce,
+  icon: Icon,
+  label,
+  count,
+  track,
+  onSelect,
+}: {
+  layoutId: string;
+  active: boolean;
+  reduce: boolean;
+  icon: typeof Mail;
+  label: string;
+  count: number;
+  track: string;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      onClick={onSelect}
+      data-track={track}
+      className={cn(
+        "relative inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors",
+        active ? "text-white" : "text-muted-foreground hover:text-foreground",
+      )}
+    >
+      {active && (
+        <motion.span
+          layoutId={layoutId}
+          className="absolute inset-0 rounded-md bg-gradient-to-r from-primary to-primary-solid shadow-sm shadow-primary/25"
+          transition={{ duration: reduce ? 0 : 0.28, ease: [0.22, 1, 0.36, 1] }}
+        />
+      )}
+      <Icon className="relative z-10 h-3.5 w-3.5" aria-hidden />
+      <span className="relative z-10">{label}</span>
+      <span
+        className={cn(
+          "tnum relative z-10 rounded-full px-1.5 py-px font-mono text-[10px] font-semibold",
+          active ? "bg-white/20 text-white" : "bg-muted text-muted-foreground",
+        )}
+      >
+        {count.toLocaleString("en-US")}
+      </span>
+    </button>
+  );
+}
+
 /** Search + multi-select-delete + per-row View, over a given set of rows.
  *  Calls onChanged after a successful delete so the parent can refetch.
  *
@@ -403,6 +465,11 @@ function SelectableLeads({
   const [finding, setFinding] = useState(false);
   const [findResult, setFindResult] = useState<FindEmailsOutcome | null>(null);
   const [findOpen, setFindOpen] = useState(false);
+  // With email / No email tabs (§11.1 sliding-pill). useId keeps the indicator's
+  // layoutId unique if two lead tables ever mount at once.
+  const [tab, setTab] = useState<"with" | "no">("with");
+  const tabLayoutId = useId();
+  const reduce = !!useReducedMotion();
 
   // drop selected ids that no longer exist (after a refresh)
   useEffect(() => {
@@ -427,9 +494,14 @@ function SelectableLeads({
 
   // Leads split by whether they carry a stored address: no-email leads are
   // excluded from campaigns (Send Campaigns only lists leads with an email),
-  // so they get their own section here — with Find emails to recover them.
+  // so they get their own tab here — with Find emails to recover them. Once the
+  // finder saves an address, the refetch re-derives this split and the lead
+  // transfers to the With email tab on its own.
   const withEmail = filtered.filter((r) => (r.emails?.length ?? 0) > 0);
   const noEmail = filtered.filter((r) => (r.emails?.length ?? 0) === 0);
+  // Tabs appear whenever the (unfiltered) list has a no-email lead, so a search
+  // term can't collapse the tab row out from under the user mid-typing.
+  const split = rows.some((r) => (r.emails?.length ?? 0) === 0);
   // no-email leads the Email Finder can work on: it scrapes the lead's website.
   // A multi-selection narrows the run to just the checked leads; with nothing
   // checked in this section, the whole section is tried.
@@ -468,10 +540,10 @@ function SelectableLeads({
   });
 
   // "Find emails" — POST the no-email leads that have a website (the checked
-  // ones if any, else the whole section) to the n8n Email Finder (same route
+  // ones if any, else the whole tab) to the n8n Email Finder (same route
   // Send Campaigns used to call). Found addresses are persisted onto the lead
-  // rows server-side; onChanged() refetches, so the newly-addressed leads move
-  // up into the With email section.
+  // rows server-side; onChanged() refetches, so the newly-addressed leads
+  // transfer to the With email tab.
   async function findEmails() {
     const batch = findTargets
       .slice(0, MAX_FIND_LEADS)
@@ -612,7 +684,7 @@ function SelectableLeads({
         </p>
       )}
 
-      {noEmail.length === 0 ? (
+      {!split ? (
         // no split needed: every lead has an address (or the list is empty)
         <LeadsTableView
           rows={filtered}
@@ -622,55 +694,103 @@ function SelectableLeads({
         />
       ) : (
         <>
-          {withEmail.length > 0 && (
-            <>
-              <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-                With email · {withEmail.length.toLocaleString("en-US")}
-              </div>
-              <LeadsTableView
-                rows={withEmail}
-                selection={selectionFor(withEmail)}
-                onView={setViewing}
-                emptyHint=""
-              />
-            </>
-          )}
-
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-2">
-            <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-              No email · {noEmail.length.toLocaleString("en-US")}
-            </div>
-            <span className="font-mono text-[10px] text-muted-foreground">
-              left out of campaigns until an address is found
-            </span>
-            {findable.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                data-track="leads_find_emails"
-                disabled={finding}
-                onClick={() => void findEmails()}
-                className="ml-auto gap-1.5"
-              >
-                {finding ? (
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden />
-                ) : (
-                  <Globe className="h-3.5 w-3.5" aria-hidden />
-                )}
-                {finding
-                  ? "Finding emails…"
-                  : `Find emails (${Math.min(findTargets.length, MAX_FIND_LEADS).toLocaleString("en-US")}${
-                      selectedFindable.length > 0 ? " selected" : ""
-                    })`}
-              </Button>
-            )}
+          <div
+            role="tablist"
+            aria-label="Leads by email status"
+            className="inline-flex gap-1 self-start rounded-lg bg-card p-1 ring-1 ring-foreground/10"
+          >
+            <EmailTabPill
+              layoutId={tabLayoutId}
+              active={tab === "with"}
+              reduce={reduce}
+              icon={Mail}
+              label="With email"
+              count={withEmail.length}
+              track="leads_tab_with_email"
+              onSelect={() => setTab("with")}
+            />
+            <EmailTabPill
+              layoutId={tabLayoutId}
+              active={tab === "no"}
+              reduce={reduce}
+              icon={MailX}
+              label="No email"
+              count={noEmail.length}
+              track="leads_tab_no_email"
+              onSelect={() => setTab("no")}
+            />
           </div>
-          <LeadsTableView
-            rows={noEmail}
-            selection={selectionFor(noEmail)}
-            onView={setViewing}
-            emptyHint=""
-          />
+
+          {/* overflow-x-clip so the directional slide never spawns a page
+              scrollbar (§11.1); direction: No email sits to the right. */}
+          <div className="overflow-x-clip">
+            <AnimatePresence mode="wait" initial={false} custom={tab === "no" ? 1 : -1}>
+              <motion.div
+                key={tab}
+                role="tabpanel"
+                custom={tab === "no" ? 1 : -1}
+                variants={TAB_PANEL_VARIANTS}
+                initial="enter"
+                animate="center"
+                exit="exit"
+                transition={{ duration: reduce ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
+                className="flex flex-col gap-3"
+              >
+                {tab === "with" ? (
+                  <LeadsTableView
+                    rows={withEmail}
+                    selection={selectionFor(withEmail)}
+                    onView={setViewing}
+                    emptyHint={
+                      term
+                        ? `No leads with an email match “${q.trim()}”.`
+                        : "No leads with an email yet — run Find emails on the No email tab."
+                    }
+                  />
+                ) : (
+                  <>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        left out of campaigns until an address is found — found leads move to
+                        the With email tab
+                      </span>
+                      {findable.length > 0 && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          data-track="leads_find_emails"
+                          disabled={finding}
+                          onClick={() => void findEmails()}
+                          className="ml-auto gap-1.5"
+                        >
+                          {finding ? (
+                            <RefreshCw className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                          ) : (
+                            <Globe className="h-3.5 w-3.5" aria-hidden />
+                          )}
+                          {finding
+                            ? "Finding emails…"
+                            : `Find emails (${Math.min(findTargets.length, MAX_FIND_LEADS).toLocaleString("en-US")}${
+                                selectedFindable.length > 0 ? " selected" : ""
+                              })`}
+                        </Button>
+                      )}
+                    </div>
+                    <LeadsTableView
+                      rows={noEmail}
+                      selection={selectionFor(noEmail)}
+                      onView={setViewing}
+                      emptyHint={
+                        term
+                          ? `No leads without an email match “${q.trim()}”.`
+                          : "Every lead here has an email address."
+                      }
+                    />
+                  </>
+                )}
+              </motion.div>
+            </AnimatePresence>
+          </div>
         </>
       )}
 

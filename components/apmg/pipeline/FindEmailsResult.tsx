@@ -202,8 +202,8 @@ function SuccessBody({
             ) : (
               "."
             )}{" "}
-            The newly-addressed lead{found === 1 ? " has" : "s have"} moved up into the With email
-            list.
+            The newly-addressed lead{found === 1 ? " has" : "s have"} moved to the With email
+            tab.
           </>
         )}
       </p>

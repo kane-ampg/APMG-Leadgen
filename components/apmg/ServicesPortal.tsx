@@ -157,6 +157,14 @@ interface Service {
   /** Card banner — a real APMG job-site photo. Optional so the pseudo-service
    *  (GENERAL_SERVICE) and the modal, which share this shape, need not carry one. */
   photo?: StaticImageData;
+  /** Full service description, verbatim from the public site's service detail
+   *  page (apmgservices.com.au/services/*) — the copy behind each card's
+   *  "Tell me more". Shown in the enquiry modal so the visitor sees what the
+   *  trade covers at the exact point they enquire about it. Paragraphs are
+   *  separated by "\n\n". Optional: `general` has no site page. */
+  description?: string;
+  /** The same site page's "what's included" bullet list, verbatim. */
+  includes?: string[];
 }
 
 /**
@@ -174,7 +182,13 @@ const GENERAL_SERVICE: Service = {
 /** Services from the APMG site. Blurb rule (Company-Brief: avoid exaggeration,
  *  avoid overpromising): describe the work, not superlatives — "flawless",
  *  "perfection" and unbacked speed promises are trust-negative with facility
- *  managers, who've heard them from every contractor that later let them down. */
+ *  managers, who've heard them from every contractor that later let them down.
+ *
+ *  `description` + `includes` are DIFFERENT: they're the client's own published
+ *  copy, carried verbatim from each service's detail page on
+ *  apmgservices.com.au/services (the "Tell me more" modals) into the enquiry
+ *  modal, per the client's request. Verbatim means verbatim — edit the site,
+ *  not this file, when the copy needs to change. Synced 2026-07-28. */
 const SERVICES: Service[] = [
   {
     slug: "electrical",
@@ -182,6 +196,16 @@ const SERVICES: Service[] = [
     blurb: "Safe, licensed electrical work — from new power points to full rewires.",
     icon: Zap,
     photo: photoElectrical,
+    description:
+      "APMG Services offers licensed electrical solutions for residential, commercial, and industrial properties across Melbourne. From power upgrades, rewiring, and lighting installations to switchboard upgrades, testing, maintenance, and emergency repairs we do it all.\n\nOur certified electricians ensure every job meets strict safety and compliance standards. Whether it’s a one-off fix or ongoing electrical maintenance, you can rely on us for efficient, expert service.",
+    includes: [
+      "Installation and maintenance of lighting systems",
+      "Power point and switchboard upgrades",
+      "Data and communications cabling",
+      "Emergency electrical repairs and fault finding",
+      "Testing and tagging for compliance and safety",
+      "Energy-efficient solutions to reduce operating costs",
+    ],
   },
   {
     slug: "painting",
@@ -189,6 +213,15 @@ const SERVICES: Service[] = [
     blurb: "Interior and exterior painting, prepared properly and finished with care.",
     icon: Paintbrush,
     photo: photoPainting,
+    description:
+      "Transform your spaces with expert painting solutions tailored for residential, commercial, and industrial properties. At APMG Services, our skilled painters deliver flawless finishes, long-lasting results, and minimal disruption — whether it’s a full repaint, touch-up, or detailed surface preparation.\n\nWe use premium materials and follow strict compliance for safety and quality. Trust Melbourne’s trades hub to bring colour, protection, and value to your property.",
+    includes: [
+      "Interior and exterior painting",
+      "Surface preparation, repair, and priming",
+      "Protective coatings and weather-resistant finishes",
+      "Feature walls and custom colour solutions",
+      "Painting for offices, schools, healthcare facilities, and homes",
+    ],
   },
   {
     slug: "plumbing",
@@ -196,6 +229,16 @@ const SERVICES: Service[] = [
     blurb: "Leaks, blocked drains, installs and urgent repairs — handled properly.",
     icon: Droplets,
     photo: photoPlumbing,
+    description:
+      "From blocked drains and burst pipes to full plumbing fit-outs, APMG Services covers all aspects of residential, commercial, and industrial plumbing. We handle repairs, upgrades, installations, and ongoing maintenance with speed, precision, and care.\n\nOur licensed plumbers ensure every job is completed to Australian standards, keeping your property safe, compliant, and running smoothly. No matter the size or urgency, we’ve got the tools and expertise to get it sorted.",
+    includes: [
+      "General plumbing repairs and maintenance",
+      "Leak detection and emergency plumbing support",
+      "Blocked drain clearing and pipework solutions",
+      "Hot water system installation, repair, and servicing",
+      "Tap, toilet, and fixture installations or replacements",
+      "Preventative maintenance to reduce costly breakdowns",
+    ],
   },
   {
     slug: "carpentry",
@@ -203,6 +246,16 @@ const SERVICES: Service[] = [
     blurb: "Repairs, installations and custom timberwork — doors, frames, cabinetry.",
     icon: Hammer,
     photo: photoCarpentry,
+    description:
+      "From structural framing to detailed finishes, APMG Services delivers expert carpentry and joinery across Melbourne. We specialise in repairs, renovations, fit-outs, and custom-built solutions for residential, commercial, and industrial properties.\n\nOur qualified carpenters work with precision and care to ensure every project is durable, compliant, and built to last. Whether it’s doors, walls, decking or cabinetry — we’ve got every detail covered.",
+    includes: [
+      "Structural repairs, framing, and general carpentry",
+      "Custom joinery and fittings designed for your space",
+      "Door, window, and skirting board installation or replacement",
+      "Partitioning, shelving, and storage solutions",
+      "Restoration and repair of existing timberwork",
+      "Outdoor carpentry including decking, fencing, and pergolas",
+    ],
   },
   {
     slug: "flooring",
@@ -210,6 +263,16 @@ const SERVICES: Service[] = [
     blurb: "Timber, vinyl, laminate and carpet — repairs, replacement and new floors.",
     icon: Layers,
     photo: photoFlooring,
+    description:
+      "At APMG Services, we supply and install all types of flooring for residential, commercial, and industrial spaces. From vinyl, laminate, and hybrid to carpet, tiles, and timber — we handle everything from surface prep to final finish.\n\nOur experienced team ensures every floor is level, compliant, and built to withstand daily wear. Whether it’s a fresh installation or a flooring upgrade, we deliver quality, durability, and style in every square metre.",
+    includes: [
+      "Supply and installation of vinyl, carpet, timber, and laminate flooring",
+      "Floor repairs, refinishing, and restoration",
+      "Non-slip and safety flooring for commercial spaces",
+      "High-performance surfaces designed for heavy use",
+      "Floor preparation and levelling prior to installation",
+      "Ongoing maintenance to extend the life of flooring investments",
+    ],
   },
   {
     slug: "gardening",
@@ -217,6 +280,15 @@ const SERVICES: Service[] = [
     blurb: "Lawns, gardens and grounds kept safe, tidy and presentable.",
     icon: Sprout,
     photo: photoGardening,
+    description:
+      "APMG Services provides professional landscaping and garden maintenance for residential, commercial, and public spaces across Melbourne. We cover everything from lawn care, pruning, and weeding to landscaping, planting, and outdoor upgrades. Our work keeps your grounds safe, tidy, and looking their best all year round.\n\nOur team delivers precision and care on every job, presenting each site at its best and meeting compliance requirements. You can book us for one-off projects or choose a scheduled maintenance plan. Either way, we keep your outdoor areas in top shape.",
+    includes: [
+      "Consistent and reliable maintenance",
+      "Skilled team with attention to detail",
+      "Flexible schedules tailored to client needs",
+      "Safe and compliant grounds management",
+      "Proven experience with large outdoor spaces",
+    ],
   },
   {
     slug: "handyman",
@@ -224,6 +296,17 @@ const SERVICES: Service[] = [
     blurb: "The odd jobs and small repairs — all handled in a single call.",
     icon: Wrench,
     photo: photoHandyman,
+    // Site source reads "…or general upkeep no task is too small" — an em dash
+    // restores the missing punctuation; the words are otherwise untouched.
+    description:
+      "From minor repairs to odd jobs, APMG Services offers fast, professional handyman support for homes, businesses, and facilities. Whether it’s patching walls, fixing locks, hanging fixtures, assembling furniture, or general upkeep — no task is too small.\n\nOur skilled handymen work efficiently with a focus on safety, quality, and minimal disruption. Ideal for ongoing maintenance or one-off jobs, we’re your trusted team for reliable, no-fuss property support.",
+    includes: [
+      "General repairs and upkeep",
+      "Fixture and fitting installations",
+      "Minor carpentry and painting works",
+      "Door, window, and lock repairs",
+      "Small-scale maintenance tasks",
+    ],
   },
   {
     slug: "make-safe",
@@ -231,6 +314,15 @@ const SERVICES: Service[] = [
     blurb: "Securing and making sites safe after storm damage, faults or break-ins.",
     icon: ShieldCheck,
     photo: photoMakeSafe,
+    description:
+      "When emergencies strike, APMG Services is ready. We provide rapid, all-trade make safe solutions for residential, commercial, and industrial properties — from securing broken windows and damaged doors to addressing structural risks, leaks, and electrical hazards.\n\nOur licensed team responds quickly to minimise damage, restore safety, and meet insurance or compliance requirements. Whether it’s storm damage, vandalism, or urgent repairs, we’re the trusted partner for fast, effective property protection.",
+    includes: [
+      "Emergency repairs to secure properties",
+      "Storm and impact damage response",
+      "Temporary structural stabilisation",
+      "Boarding up broken windows or doors",
+      "Hazard removal to eliminate immediate risks",
+    ],
   },
 ];
 

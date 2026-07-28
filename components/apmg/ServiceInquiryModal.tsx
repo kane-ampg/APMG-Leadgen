@@ -35,6 +35,14 @@ export interface InquiryService {
    *  Optional: the `general` enquiry path has no single trade photo, so it
    *  falls back to a form-only modal. */
   photo?: StaticImageData;
+  /** Full service description carried verbatim from the public site's service
+   *  detail page (see SERVICES in ServicesPortal.tsx). Rendered under the
+   *  photo on the desktop book panel, and above the form on mobile — so the
+   *  visitor sees what the trade covers at the point of enquiry. "\n\n"
+   *  separates paragraphs. Optional: `general` has no site page. */
+  description?: string;
+  /** The site page's "what's included" bullets, shown after the description. */
+  includes?: string[];
 }
 
 type Status = "idle" | "sending" | "sent" | "error";
@@ -129,8 +137,18 @@ export function ServiceInquiryModal({
     // carry over to a new submission (or a new terms version).
     setConsentChecked(false);
     setOpenDoc(null);
-    // focus the first field after the trap's initial focus + paint
-    requestAnimationFrame(() => nameRef.current?.focus());
+    // Focus the first field after the trap's initial focus + paint — EXCEPT
+    // when the in-form description block opens the body (below-sm with a
+    // description, or any width without a photo panel): focusing the Name
+    // input would scroll the body straight past the copy the modal exists to
+    // surface, and pop a phone keyboard over it. There the trap's default
+    // focus (the header's Close button) is the right resting place.
+    const descriptionLeadsForm =
+      !!service.description &&
+      !(service.photo && window.matchMedia("(min-width: 640px)").matches);
+    if (!descriptionLeadsForm) {
+      requestAnimationFrame(() => nameRef.current?.focus());
+    }
   }, [service]);
 
   // Fetch the current published legal docs when the modal opens (customer host
@@ -281,7 +299,11 @@ export function ServiceInquiryModal({
               aria-label={`Enquire about ${service.name}`}
               tabIndex={-1}
               className={cn(
-                "flex overflow-hidden rounded-2xl border border-border bg-card shadow-2xl outline-none",
+                // max-h caps the dialog to the viewport (minus the wrapper's
+                // p-4) so header + footer stay reachable on short viewports —
+                // e.g. landscape phones — with the body shrinking + scrolling
+                // via the flex chain below instead of clipping.
+                "flex max-h-[calc(100dvh-2rem)] overflow-hidden rounded-2xl border border-border bg-card shadow-2xl outline-none",
                 // "Book split in half": with a trade photo, the dialog widens on
                 // desktop into a two-panel spread — form on the left, photo card
                 // on the right. Without one (the `general` enquiry), it stays the
@@ -299,7 +321,7 @@ export function ServiceInquiryModal({
                   with a photo it takes the left half, else the full width. ── */}
               <div className="flex min-w-0 flex-1 flex-col">
               {/* header */}
-              <div className="flex items-start gap-3 border-b border-border px-5 py-4">
+              <div className="flex shrink-0 items-start gap-3 border-b border-border px-5 py-4">
                 <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary-solid text-primary-foreground">
                   <service.icon className="h-5 w-5" aria-hidden />
                 </div>
@@ -365,13 +387,33 @@ export function ServiceInquiryModal({
                    the browser's native bubbles never fight the styled states */
                 <form
                   noValidate
+                  // flex chain (dialog max-h → form → body): under a squeezed
+                  // viewport the body is what shrinks and scrolls, keeping the
+                  // footer's Send button on screen.
+                  className="flex min-h-0 flex-1 flex-col"
                   onSubmit={(e) => {
                     e.preventDefault();
                     void submit();
                   }}
                 >
                   {/* body — capped height so the modal survives short viewports */}
-                  <div className="max-h-[min(62vh,540px)] space-y-4 overflow-y-auto px-5 py-4">
+                  <div className="max-h-[min(62vh,540px)] min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+                    {/* Service description — the site detail-page copy, so the
+                        enquiry opens on what the trade actually covers. On
+                        desktop the book's photo panel carries it (hidden here);
+                        this in-form block is the mobile surface, and the only
+                        surface when there's no photo panel. */}
+                    {service.description && (
+                      <div
+                        className={cn(
+                          "space-y-2.5 rounded-lg bg-muted/40 p-3",
+                          service.photo && "sm:hidden",
+                        )}
+                      >
+                        <ServiceDescription service={service} />
+                      </div>
+                    )}
+
                     {/* What happens next — a form is an anxious hand-off to a
                         stranger; naming the process (Company-Brief: "poor
                         follow-up after quoting" is a top client pain point)
@@ -607,7 +649,7 @@ export function ServiceInquiryModal({
                   </div>
 
                   {/* footer */}
-                  <div className="flex items-center justify-end gap-2 border-t border-border bg-muted/40 px-5 py-3">
+                  <div className="flex shrink-0 items-center justify-end gap-2 border-t border-border bg-muted/40 px-5 py-3">
                     <Button
                       variant="outline"
                       size="sm"
@@ -635,11 +677,13 @@ export function ServiceInquiryModal({
               )}
               </div>
 
-              {/* ── Right page: the trade photo, like the facing page of an open
-                  book. Desktop-only (hidden below sm so the mobile modal stays a
-                  clean single column). A thin left border is the book's spine;
-                  the bottom gradient + service name caption seat the image and
-                  name the trade the enquiry is about. Decorative → alt="". ── */}
+              {/* ── Right page: the trade photo + the service's site description,
+                  like the facing page of an open book. Desktop-only (hidden below
+                  sm so the mobile modal stays a clean single column — the form
+                  body carries the description there). A thin left border is the
+                  book's spine; the bottom gradient + service name caption seat
+                  the image and name the trade the enquiry is about.
+                  Decorative → alt="". ── */}
               {service.photo && (
                 // rounded-r-2xl matches the dialog's own radius on THIS panel so
                 // the corner is clipped here too — Safari/WebKit can leak a
@@ -647,29 +691,54 @@ export function ServiceInquiryModal({
                 // rounded corners when the child forms its own stacking context,
                 // and the belt-and-braces radius closes that gap.
                 <div className="relative hidden w-[46%] shrink-0 self-stretch overflow-hidden rounded-r-2xl border-l border-border bg-muted sm:block">
-                  <Image
-                    src={service.photo}
-                    alt=""
-                    fill
-                    placeholder="blur"
-                    sizes="400px"
-                    // object-COVER fills the book's right page edge-to-edge —
-                    // matte bars around a letterboxed photo read as placeholder
-                    // content, matching the card banners and the hero.
-                    className="object-cover object-center"
-                  />
-                  {/* bottom scrim so the caption stays legible over any photo */}
-                  <span
-                    aria-hidden
-                    className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black/70 via-black/20 to-transparent"
-                  />
-                  <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 p-4">
-                    <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/15 text-white backdrop-blur-sm ring-1 ring-white/25">
-                      <service.icon className="h-4 w-4" aria-hidden />
-                    </span>
-                    <span className="font-heading text-sm font-semibold text-white drop-shadow-[0_1px_6px_rgba(0,0,0,0.8)]">
-                      {service.name}
-                    </span>
+                  {/* absolute inset-0 so the panel contributes ZERO intrinsic
+                      height: the form column keeps governing the dialog height
+                      (exactly as it did when this page was photo-only), and
+                      description copy that doesn't fit scrolls instead of
+                      stretching the dialog past the viewport. */}
+                  <div className="absolute inset-0 flex flex-col">
+                    {/* photo box: fixed height when the description shares the
+                        page, the whole page when there's none (legacy layout) */}
+                    <div
+                      className={cn(
+                        "relative shrink-0",
+                        service.description ? "h-44 lg:h-52" : "flex-1",
+                      )}
+                    >
+                      <Image
+                        src={service.photo}
+                        alt=""
+                        fill
+                        placeholder="blur"
+                        sizes="400px"
+                        // object-COVER fills the book's right page edge-to-edge —
+                        // matte bars around a letterboxed photo read as placeholder
+                        // content, matching the card banners and the hero.
+                        className="object-cover object-center"
+                      />
+                      {/* bottom scrim so the caption stays legible over any photo */}
+                      <span
+                        aria-hidden
+                        className="absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black/70 via-black/20 to-transparent"
+                      />
+                      <div className="absolute inset-x-0 bottom-0 flex items-center gap-2 p-4">
+                        <span className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-white/15 text-white backdrop-blur-sm ring-1 ring-white/25">
+                          <service.icon className="h-4 w-4" aria-hidden />
+                        </span>
+                        <span className="font-heading text-sm font-semibold text-white drop-shadow-[0_1px_6px_rgba(0,0,0,0.8)]">
+                          {service.name}
+                        </span>
+                      </div>
+                    </div>
+                    {/* the site detail-page copy for this trade — what "Enquire"
+                        is actually about. min-h-0 + overflow-y-auto keeps a long
+                        description scrolling inside the page rather than
+                        stretching the dialog past the form column. */}
+                    {service.description && (
+                      <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto border-t border-border bg-card p-4">
+                        <ServiceDescription service={service} />
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -678,5 +747,42 @@ export function ServiceInquiryModal({
         </>
       )}
     </AnimatePresence>
+  );
+}
+
+/**
+ * The service's site detail-page copy: description paragraphs plus the
+ * "What's included" bullets. One body, two hosts — the desktop book panel and
+ * the mobile in-form block — so the two surfaces can never drift apart.
+ * Renders nothing without a description (the `general` enquiry path).
+ */
+function ServiceDescription({ service }: { service: InquiryService }) {
+  if (!service.description) return null;
+  return (
+    <>
+      {service.description.split("\n\n").map((para) => (
+        <p key={para.slice(0, 32)} className="text-xs leading-relaxed text-muted-foreground">
+          {para}
+        </p>
+      ))}
+      {service.includes && service.includes.length > 0 && (
+        <div>
+          <h3 className="font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            What&rsquo;s included
+          </h3>
+          <ul className="mt-1.5 space-y-1">
+            {service.includes.map((item) => (
+              <li
+                key={item}
+                className="flex items-start gap-1.5 text-xs leading-relaxed text-muted-foreground"
+              >
+                <CircleCheck className="mt-0.5 h-3 w-3 shrink-0 text-primary" aria-hidden />
+                {item}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </>
   );
 }

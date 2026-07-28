@@ -35,6 +35,9 @@ export interface CompanyIdentity {
   googleReviewsUrl: string;
   /** Public website. */
   website: string;
+  /** Public social profiles, in display order. Live pages only — a dead social
+   *  link on a trust surface reads worse than no link at all. */
+  socials: { network: "facebook" | "instagram" | "tiktok"; label: string; url: string }[];
 }
 
 export const COMPANY: CompanyIdentity = {
@@ -57,6 +60,23 @@ export const COMPANY: CompanyIdentity = {
   googleReviewsUrl:
     "https://www.google.com/search?q=APMG+Services#lrd=0x6ad6319e6f7bafcf:0xca054939c7c38206,1,,,,",
   website: "https://www.apmgservices.com.au/",
+  socials: [
+    {
+      network: "facebook",
+      label: "Facebook",
+      url: "https://www.facebook.com/p/APMG-Services-100072630217180/",
+    },
+    {
+      network: "instagram",
+      label: "Instagram",
+      url: "https://www.instagram.com/apmg.services/",
+    },
+    {
+      network: "tiktok",
+      label: "TikTok",
+      url: "https://www.tiktok.com/@apmgservices",
+    },
+  ],
 };
 
 /** Name to use where a legal entity is expected (Terms/Privacy): the registered

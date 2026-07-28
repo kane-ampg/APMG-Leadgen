@@ -48,12 +48,20 @@ create table if not exists public.portal_inquiries (
   business     text,          -- denormalized leads.name
   campaign     text,
   category     text,          -- denormalized leads.category (what sector they were from)
+  source       text,          -- traffic source (apmg_src cookie): tiktok | facebook | instagram | … (null = untagged)
   status       text not null default 'new',   -- new | contacted | closed
   created_at   timestamptz not null default now()
 );
 create index if not exists portal_inquiries_created_idx on public.portal_inquiries (created_at desc);
 create index if not exists portal_inquiries_status_idx  on public.portal_inquiries (status);
 alter table public.portal_inquiries enable row level security;
+
+-- Traffic-source attribution (social promotion: ?utm_source=tiktok|facebook|
+-- instagram on the promoted portal link, or a recognised social Referer).
+-- Upgrades tables created before the column existed; portal_events needs no
+-- change — the source rides in its props jsonb (props.source), stamped
+-- server-side from the same apmg_src cookie.
+alter table public.portal_inquiries add column if not exists source text;
 
 alter table public.leads add column if not exists engaged    boolean not null default false;
 alter table public.leads add column if not exists engaged_at timestamptz;

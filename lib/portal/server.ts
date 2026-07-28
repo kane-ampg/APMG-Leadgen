@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { type NextRequest } from "next/server";
 import { isUuid } from "@/lib/pipeline/server";
+import { normalizeSource, SOURCE_COOKIE } from "@/lib/portal/source";
 
 // Server-only helpers shared by the client-portal API routes (/api/portal/*)
 // and the /t/[id] attribution redirect. Same house rules as lib/pipeline/server:
@@ -44,6 +45,10 @@ export interface PortalInquiry {
   business: string | null;
   campaign: string | null;
   category: string | null;
+  /** Traffic source the enquirer arrived from (apmg_src cookie — utm_source
+   *  on the promoted portal link / social Referer): "tiktok", "facebook",
+   *  "instagram", … Null = no tagged visit (outreach or direct). */
+  source: string | null;
   status: InquiryStatus;
   /** The legal-docs version the enquirer agreed to when submitting (null on
    *  rows created before the consent gate / from a pre-migration schema). */
@@ -206,25 +211,32 @@ export function isBotRequest(req: NextRequest | Request): boolean {
 const MAX_CAMPAIGN_LEN = 120;
 
 /**
- * Read the attribution cookies dropped by /t/[id]: `apmg_ref` (the lead uuid,
- * httpOnly) and `apmg_ref_campaign`. Parsed straight off the Cookie header so
- * it works for both NextRequest and the plain Request the route handlers get.
- * The lead id is only trusted when it's a well-formed uuid — the cookie value
- * ends up interpolated into PostgREST filters downstream.
+ * Read the visitor's attribution cookies: `apmg_ref` (the lead uuid, httpOnly)
+ * and `apmg_ref_campaign` dropped by the /t/[id] outreach redirect, plus
+ * `apmg_src` — the traffic source (tiktok / facebook / instagram / …) dropped
+ * by middleware.ts when a /portal visit carries ?utm_source= or a social
+ * Referer. Parsed straight off the Cookie header so it works for both
+ * NextRequest and the plain Request the route handlers get. The lead id is
+ * only trusted when it's a well-formed uuid — the cookie value ends up
+ * interpolated into PostgREST filters downstream — and the source is
+ * re-normalized so a hand-crafted cookie can't smuggle arbitrary text into
+ * events and reports.
  */
 export function readAttribution(req: NextRequest | Request): {
   leadId: string | null;
   campaign: string | null;
+  source: string | null;
 } {
   const header = req.headers.get("cookie") ?? "";
   let leadId: string | null = null;
   let campaign: string | null = null;
+  let source: string | null = null;
 
   for (const part of header.split(";")) {
     const eq = part.indexOf("=");
     if (eq === -1) continue;
     const name = part.slice(0, eq).trim();
-    if (name !== "apmg_ref" && name !== "apmg_ref_campaign") continue;
+    if (name !== "apmg_ref" && name !== "apmg_ref_campaign" && name !== SOURCE_COOKIE) continue;
 
     let value = part.slice(eq + 1).trim();
     try {
@@ -235,12 +247,14 @@ export function readAttribution(req: NextRequest | Request): {
 
     if (name === "apmg_ref") {
       if (isUuid(value)) leadId = value;
+    } else if (name === SOURCE_COOKIE) {
+      source = normalizeSource(value);
     } else if (value) {
       campaign = value.slice(0, MAX_CAMPAIGN_LEN);
     }
   }
 
-  return { leadId, campaign };
+  return { leadId, campaign, source };
 }
 
 /**
@@ -317,6 +331,16 @@ export async function insertPortalEvents(
  *  instead of a hard error. */
 export function isMissingPortalTable(status: number, detail: string): boolean {
   return status === 404 || /find the table|PGRST205/i.test(detail);
+}
+
+/** True when a PostgREST error means a COLUMN is missing from an existing
+ *  table — i.e. the table pre-dates a migration that added one (inserts hit
+ *  the schema cache as PGRST204, selects as undefined_column 42703). Callers
+ *  retry without the new column so a not-yet-run migration can only ever cost
+ *  the new field, never the row: an enquiry must not be lost over an
+ *  analytics column. */
+export function isMissingColumn(detail: string): boolean {
+  return /PGRST204|42703|column .+ does not exist|Could not find the .+ column/i.test(detail);
 }
 
 /** The send-ledger event name (portal_events). Kept in sync with

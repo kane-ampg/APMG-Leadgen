@@ -20,3 +20,12 @@ export const MAX_OUTPUT_TOKENS = 400;
 export const RATE_LIMIT = 15;
 /** Sliding window for RATE_LIMIT (10 minutes). */
 export const RATE_WINDOW_MS = 10 * 60 * 1000;
+
+/** TOTAL prompt allowance per visitor identity — the lead the visitor was
+ *  attributed to when they clicked the tracked outreach email (`apmg_ref`
+ *  cookie), or their IP when they arrived unattributed. Durable (Supabase
+ *  `chat_prompt` ledger) for attributed leads, so it survives reloads and
+ *  server restarts. The FINAL allowed prompt answers as usual and then invites
+ *  the visitor to leave their contact details via the Enquire form; anything
+ *  past the limit gets the enquiry CTA without spending a model call. */
+export const PROMPT_LIMIT = 10;

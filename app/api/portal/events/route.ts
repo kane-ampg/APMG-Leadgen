@@ -39,6 +39,12 @@ const SERVER_RESERVED_EVENT_NAMES = new Set([
   "attribution_click",
   "portal_inquiry",
   "portal_consent_accept",
+  // The chat-quota ledger (lib/portal/chatQuota) — forging it from the beacon
+  // would let a visitor inflate (never reset) a lead's used-prompt count.
+  "chat_prompt",
+  // The send ledger (/api/pipeline/campaigns/send) — it gates the Sales queue
+  // and the reports, so a forged row would fabricate outreach history.
+  "email_sent",
 ]);
 /** Trust the browser clock only within a week of ours — beyond that the
  *  client_ts would poison time-series analysis, so store null instead. */
@@ -137,7 +143,7 @@ export async function POST(req: Request): Promise<Response> {
 
   // Attribution: one cookie read + at most ONE lead lookup per batch — every
   // row in the batch belongs to the same visitor, so they share the enrichment.
-  const { leadId, campaign } = readAttribution(req);
+  const { leadId, campaign, source } = readAttribution(req);
   const lead = leadId ? await lookupLead(target.base, target.key, leadId) : null;
   const category = lead?.category ?? null;
   const ua = req.headers.get("user-agent")?.slice(0, 400) ?? null;
@@ -151,9 +157,16 @@ export async function POST(req: Request): Promise<Response> {
     // Skip forged server-only names — those rows must only ever be inserted
     // by the server routes that own them, never from the public sink.
     if (SERVER_RESERVED_EVENT_NAMES.has(ev.name)) continue;
+    // Traffic source is SERVER-owned: the apmg_src cookie (set by middleware
+    // from ?utm_source= / a social Referer on /portal) is the only writer, so
+    // a crafted beacon can't misfile traffic under a platform it didn't come
+    // from — any client-supplied props.source is dropped either way.
+    const props = sanitizeProps(ev.props);
+    delete props.source;
+    if (source) props.source = source;
     rows.push({
       event: ev.name,
-      props: sanitizeProps(ev.props),
+      props,
       view: typeof ev.view === "string" && ev.view ? ev.view.slice(0, 80) : null,
       lead_id: leadId,
       campaign,

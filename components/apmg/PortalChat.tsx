@@ -49,6 +49,12 @@ export function PortalChat() {
   const [messages, setMessages] = useState<Msg[]>([GREETING]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  // Server-enforced prompt allowance (see /api/portal/chat). `remaining` is
+  // whatever the last reply reported (null until then); once the server says
+  // the allowance is spent we lock the composer — the Enquire form is the
+  // conversation's next step. Enforcement lives server-side; this is just UX.
+  const [remaining, setRemaining] = useState<number | null>(null);
+  const [limitReached, setLimitReached] = useState(false);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -98,7 +104,7 @@ export function PortalChat() {
   async function send(e: FormEvent) {
     e.preventDefault();
     const text = input.trim().slice(0, MAX_MESSAGE_CHARS);
-    if (!text || sending) return;
+    if (!text || sending || limitReached) return;
 
     const nextMessages = [...messages, { role: "user" as const, content: text }];
     setMessages(nextMessages);
@@ -120,12 +126,17 @@ export function PortalChat() {
         body: JSON.stringify({ message: text, history }),
       });
       const data = (await res.json().catch(() => null)) as
-        | { reply?: string }
+        | { reply?: string; remaining?: number; limitReached?: boolean }
         | null;
       const reply =
         data?.reply?.trim() ||
         "Sorry — something went wrong on my end. Please tap “Enquire” above and the team will be in touch.";
       setMessages((m) => [...m, { role: "assistant", content: reply }]);
+      if (typeof data?.remaining === "number") setRemaining(data.remaining);
+      if (data?.limitReached) {
+        setLimitReached(true);
+        track("portal_chat_limit_reached");
+      }
     } catch {
       setMessages((m) => [
         ...m,
@@ -224,28 +235,44 @@ export function PortalChat() {
               )}
             </div>
 
-            {/* Composer */}
+            {/* Composer. Locks once the server reports the prompt allowance is
+                spent — the Enquire form takes over as the conversation path. */}
             <form
               onSubmit={send}
-              className="flex items-center gap-2 border-t border-border px-3 py-3"
+              className="border-t border-border px-3 py-3"
             >
-              <input
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                maxLength={MAX_MESSAGE_CHARS}
-                placeholder="Type your question…"
-                aria-label="Your message"
-                className="min-w-0 flex-1 rounded-xl bg-muted px-3 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring"
-              />
-              <button
-                type="submit"
-                disabled={!input.trim() || sending}
-                aria-label="Send message"
-                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Send className="h-4 w-4" aria-hidden />
-              </button>
+              {!limitReached && remaining !== null && remaining <= 2 && (
+                <p className="mb-2 px-1 text-[11px] leading-tight text-muted-foreground">
+                  {remaining === 0
+                    ? "That was your last question."
+                    : `${remaining} question${remaining === 1 ? "" : "s"} left`}{" "}
+                  — need more? Tap “Enquire” on a service above.
+                </p>
+              )}
+              <div className="flex items-center gap-2">
+                <input
+                  ref={inputRef}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  maxLength={MAX_MESSAGE_CHARS}
+                  disabled={limitReached}
+                  placeholder={
+                    limitReached
+                      ? "Chat limit reached — tap “Enquire” above"
+                      : "Type your question…"
+                  }
+                  aria-label="Your message"
+                  className="min-w-0 flex-1 rounded-xl bg-muted px-3 py-2 text-[13px] text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+                />
+                <button
+                  type="submit"
+                  disabled={!input.trim() || sending || limitReached}
+                  aria-label="Send message"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Send className="h-4 w-4" aria-hidden />
+                </button>
+              </div>
             </form>
           </motion.div>
         )}

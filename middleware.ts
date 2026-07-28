@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { resolveSource, SOURCE_COOKIE, SOURCE_COOKIE_MAX_AGE } from "@/lib/portal/source";
 
 /**
  * Host wall for the customer-facing deployment.
@@ -69,6 +70,32 @@ function isPortalPath(pathname: string): boolean {
   return PORTAL_ALLOW.some((p) => pathname.startsWith(p));
 }
 
+/**
+ * Traffic-source capture (the social-media promotion loop): a /portal PAGE
+ * load carrying `?utm_source=tiktok|facebook|instagram|…` — or arriving with a
+ * recognised social Referer when the tag is missing — drops the `apmg_src`
+ * cookie. The telemetry writers (/api/portal/events, /api/portal/inquiries)
+ * read it via readAttribution and stamp the source onto every event + enquiry,
+ * so the admin Enquiries tab can answer "which platform sent this lead".
+ * Last touch wins (a fresh tagged visit re-attributes); untagged visits leave
+ * the existing cookie alone. API paths are skipped — the source of a beacon is
+ * whatever the PAGE visit established.
+ */
+function withPortalSource(req: NextRequest, res: NextResponse): NextResponse {
+  const { pathname } = req.nextUrl;
+  if (pathname !== "/portal" && !pathname.startsWith("/portal/")) return res;
+  const source = resolveSource(req.nextUrl.searchParams, req.headers.get("referer"));
+  if (!source || req.cookies.get(SOURCE_COOKIE)?.value === source) return res;
+  res.cookies.set(SOURCE_COOKIE, source, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: SOURCE_COOKIE_MAX_AGE,
+  });
+  return res;
+}
+
 export function middleware(req: NextRequest) {
   const host = req.headers.get("host") || "";
   const { pathname } = req.nextUrl;
@@ -94,17 +121,18 @@ export function middleware(req: NextRequest) {
       });
       return res;
     }
-    return NextResponse.next();
+    return withPortalSource(req, NextResponse.next());
   }
 
   // Customer host: only portal surface is allowed.
-  if (isPortalPath(pathname)) return NextResponse.next();
+  if (isPortalPath(pathname)) return withPortalSource(req, NextResponse.next());
 
-  // Root and any stray page -> send the customer to the portal.
+  // Root and any stray page -> send the customer to the portal. The query
+  // string rides along so a promoted link to the bare domain
+  // (…vercel.app?utm_source=tiktok) keeps its source tag through the redirect.
   if (!pathname.startsWith("/api/")) {
     const url = req.nextUrl.clone();
     url.pathname = "/portal";
-    url.search = "";
     return NextResponse.redirect(url);
   }
 

@@ -26,6 +26,14 @@ import { MAX_HISTORY_MESSAGES, MAX_MESSAGE_CHARS, MAX_OUTPUT_TOKENS } from "@/li
 
 const CHAT_MODEL = "claude-haiku-4-5";
 
+/** True when the walled-off portal-chat key is configured. The route checks
+ *  this BEFORE consuming any of the visitor's prompt allowance — a missing or
+ *  revoked key must degrade to the enquiry nudge without permanently burning
+ *  durable quota slots on calls that can never succeed. */
+export function isChatConfigured(): boolean {
+  return Boolean(process.env.PORTAL_CHAT_ANTHROPIC_KEY);
+}
+
 /** One turn in the conversation as the client sends it up. */
 export type ChatTurn = { role: "user" | "assistant"; content: string };
 
@@ -62,6 +70,24 @@ async function loadPortalKb(): Promise<string> {
   return cachedKb;
 }
 
+/** Appended (after the cached KB block, so the cache prefix stays intact) on
+ *  the visitor's FINAL allowed prompt: answer, then convert. This is the
+ *  "last prompt directs them to leave contact details" behaviour — the model
+ *  closes the conversation by steering to the Enquire form, which is the
+ *  portal's actual lead-capture path. */
+const FINAL_TURN_NOTICE = `NOTICE: This is the visitor's FINAL message in their chat allowance. First answer their question briefly as usual. Then, in one warm sentence, let them know the chat limit has been reached and invite them to tap the “Enquire” button on any service above and leave their name and contact details so the APMG team can follow up with them personally.`;
+
+/** Per-call options from the route. */
+export interface DraftOptions {
+  /** True when this is the visitor's last allowed prompt — close with the
+   *  contact-details / Enquire CTA (see FINAL_TURN_NOTICE). */
+  finalTurn?: boolean;
+  /** Opaque, stable per-visitor ref (lead uuid / hashed IP) forwarded as
+   *  Anthropic `metadata.user_id`, so provider-side abuse detection can group
+   *  one caller's traffic. Never raw PII. */
+  userRef?: string;
+}
+
 /**
  * Draft the assistant's reply to a conversation. `history` is the prior turns
  * (already length-capped by the route) and `message` is the newest visitor line.
@@ -71,6 +97,7 @@ async function loadPortalKb(): Promise<string> {
 export async function draftPortalChatReply(
   history: ChatTurn[],
   message: string,
+  opts?: DraftOptions,
 ): Promise<string | null> {
   const apiKey = process.env.PORTAL_CHAT_ANTHROPIC_KEY;
   if (!apiKey) return null;
@@ -91,6 +118,9 @@ export async function draftPortalChatReply(
     const reply = await client.messages.create({
       model: CHAT_MODEL,
       max_tokens: MAX_OUTPUT_TOKENS,
+      // Stable, opaque per-visitor id — lets Anthropic-side abuse detection
+      // distinguish one hammering caller from our legitimate traffic.
+      ...(opts?.userRef ? { metadata: { user_id: opts.userRef } } : {}),
       system: [
         { type: "text", text: SYSTEM_INSTRUCTIONS },
         {
@@ -98,9 +128,15 @@ export async function draftPortalChatReply(
           text: kb
             ? `APMG KNOWLEDGE BASE — the only facts you may use:\n\n${kb}`
             : "No knowledge base was available. Answer only in general terms that APMG is a Melbourne multi-trade property maintenance company, and steer the visitor to the enquiry form.",
-          // Stable across every visitor → cached, so busy periods read it cheaply.
+          // Stable across every visitor. NOTE: Haiku 4.5's minimum cacheable
+          // prefix is 4096 tokens and instructions+KB currently measure well
+          // under that, so this marker is a silent no-op today (no extra cost,
+          // no savings). Kept deliberately: it engages automatically the day
+          // the knowledge base grows past the threshold.
           cache_control: { type: "ephemeral" },
         },
+        // AFTER the cache breakpoint, so adding it never invalidates the KB cache.
+        ...(opts?.finalTurn ? [{ type: "text" as const, text: FINAL_TURN_NOTICE }] : []),
       ],
       messages: [...recent, { role: "user", content: trimmed }],
     });

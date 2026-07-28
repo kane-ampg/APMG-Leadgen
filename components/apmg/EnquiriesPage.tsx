@@ -21,10 +21,12 @@ import {
   INQUIRY_STATUSES,
   isInquiryStatus,
   serviceLabel,
+  sourceLabel,
   type InquiryStatus,
   type PortalInquiry,
   type PortalSummary,
 } from "@/lib/data/enquiries";
+import { DIRECT_SOURCE } from "@/lib/portal/source";
 import { formatInt } from "@/lib/format";
 import { adminHeaders, saveAdminKey } from "@/lib/portal/adminKey";
 import { track } from "@/lib/telemetry";
@@ -377,6 +379,78 @@ function SectorList({ rows }: { rows: PortalSummary["byCategory"] }) {
   );
 }
 
+/**
+ * "Where they came from" — the traffic-channel readout for the promoted portal
+ * link. Social rows come from `?utm_source=` tags on posted links (plus the
+ * social-Referer fallback for untagged bio links); "Outreach email" is the
+ * tracked-link cohort and "Direct / unknown" everyone else. Answers "is the
+ * TikTok / Facebook / Instagram push actually sending people — and do those
+ * visits turn into enquiries?".
+ */
+function SourceList({ rows }: { rows: PortalSummary["bySource"] }) {
+  const sorted = useMemo(
+    () => [...rows].sort((a, b) => b.views + b.inquiries - (a.views + a.inquiries)),
+    [rows],
+  );
+
+  return (
+    <section className="flex h-full min-w-0 flex-col rounded-xl bg-card ring-1 ring-foreground/10">
+      <PanelHead
+        title="Where they came from"
+        meta={
+          <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+            traffic source
+          </span>
+        }
+      />
+      {sorted.length === 0 ? (
+        <PanelEmpty hint="No traffic recorded yet — sources appear once visitors land on the portal (social posts tagged ?utm_source=tiktok / facebook / instagram show up by platform)." />
+      ) : (
+        <div className="flex-1 px-4 py-3">
+          <div
+            className="grid grid-cols-[minmax(0,1fr)_repeat(3,3.6rem)] gap-x-2 pb-2 text-right text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
+            aria-hidden
+          >
+            <span className="text-left">Source</span>
+            <span>Visitors</span>
+            <span>Views</span>
+            <span>Enq</span>
+          </div>
+          <ul>
+            {sorted.map((r) => {
+              const direct = r.source === DIRECT_SOURCE;
+              return (
+                <li
+                  key={r.source}
+                  className="grid grid-cols-[minmax(0,1fr)_repeat(3,3.6rem)] items-center gap-x-2 border-t border-border/70 py-2.5"
+                >
+                  <span
+                    className={cn(
+                      "truncate text-[12.5px] font-medium",
+                      direct ? "text-muted-foreground" : "text-foreground",
+                    )}
+                  >
+                    {sourceLabel(r.source)}
+                  </span>
+                  <span className="tnum text-right font-mono text-[12px] text-foreground">
+                    {formatInt(r.visitors)}
+                  </span>
+                  <span className="tnum text-right font-mono text-[12px] text-foreground">
+                    {formatInt(r.views)}
+                  </span>
+                  <span className="tnum text-right font-mono text-[12px] text-primary">
+                    {formatInt(r.inquiries)}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function AnalysisSkeleton({ title }: { title: string }) {
   return (
     <section className="flex h-full min-w-0 flex-col rounded-xl bg-card ring-1 ring-foreground/10" aria-busy>
@@ -602,11 +676,24 @@ function EmailLink({ inquiry }: { inquiry: PortalInquiry }) {
   );
 }
 
-/** Sector + attributed outreach lead. Direct visitors (no apmg_ref cookie at
- *  submit time) get a quiet "Direct" pill instead of a business line. */
+/** "via TikTok" / "via Facebook" chip — the enquirer's traffic source (the
+ *  apmg_src cookie from a tagged social link or social Referer). */
+function SourceChip({ source }: { source: string }) {
+  return (
+    <span className="inline-flex shrink-0 items-center rounded-full border border-primary/40 bg-primary/5 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary">
+      via {sourceLabel(source)}
+    </span>
+  );
+}
+
+/** Sector + attributed outreach lead + traffic source. Direct visitors (no
+ *  apmg_ref cookie at submit time) get a quiet "Direct" pill instead of a
+ *  business line — unless a source tag says which platform sent them. */
 function Attribution({ inquiry }: { inquiry: PortalInquiry }) {
   if (!inquiry.business && !inquiry.category) {
-    return (
+    return inquiry.source ? (
+      <SourceChip source={inquiry.source} />
+    ) : (
       <span className="inline-flex items-center rounded-full border border-border bg-background px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground">
         Direct
       </span>
@@ -617,16 +704,19 @@ function Attribution({ inquiry }: { inquiry: PortalInquiry }) {
       <div className="truncate text-[12px] text-foreground">
         {inquiry.category ?? DIRECT_CATEGORY}
       </div>
-      {inquiry.business && (
-        <div className="mt-0.5 flex min-w-0 items-center gap-1.5">
-          <span className="truncate font-mono text-[10.5px] text-muted-foreground">
-            {inquiry.business}
-          </span>
-          {inquiry.campaign && (
+      {(inquiry.business || inquiry.source) && (
+        <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5">
+          {inquiry.business && (
+            <span className="truncate font-mono text-[10.5px] text-muted-foreground">
+              {inquiry.business}
+            </span>
+          )}
+          {inquiry.business && inquiry.campaign && (
             <span className="shrink-0 rounded-full border border-primary/40 px-1.5 py-px font-mono text-[9px] uppercase tracking-[0.08em] text-primary">
               {inquiry.campaign}
             </span>
           )}
+          {inquiry.source && <SourceChip source={inquiry.source} />}
         </div>
       )}
     </div>
@@ -743,6 +833,7 @@ export function EnquiriesPage() {
           totals: sum.totals,
           byService: Array.isArray(sum.byService) ? sum.byService : [],
           byCategory: Array.isArray(sum.byCategory) ? sum.byCategory : [],
+          bySource: Array.isArray(sum.bySource) ? sum.bySource : [],
           recentEvents: Array.isArray(sum.recentEvents) ? sum.recentEvents : [],
         },
         inquiries: Array.isArray(inq.inquiries) ? inq.inquiries : [],
@@ -1063,6 +1154,15 @@ export function EnquiriesPage() {
               )}
             </Reveal>
           </div>
+
+          {/* ── 3b · traffic sources (the social-promotion readout) ──────── */}
+          <Reveal delay={0.16} className="mt-3">
+            {summary ? (
+              <SourceList rows={summary.bySource} />
+            ) : (
+              <AnalysisSkeleton title="Where they came from" />
+            )}
+          </Reveal>
 
           {/* ── 4 · the enquiries themselves ────────────────────────────── */}
           <Reveal delay={0.18} className="mt-3">

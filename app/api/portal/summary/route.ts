@@ -1,5 +1,6 @@
 import { sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
-import { isMissingPortalTable } from "@/lib/portal/server";
+import { isMissingColumn, isMissingPortalTable } from "@/lib/portal/server";
+import { DIRECT_SOURCE, OUTREACH_SOURCE } from "@/lib/portal/source";
 
 // GET /api/portal/summary — the aggregation behind the admin Enquiries tab:
 // funnel totals (email click → portal visit → service open → enquiry), the
@@ -43,19 +44,28 @@ type InquiryRow = {
   service_slug: string | null;
   category: string | null;
   campaign: string | null;
+  lead_id: string | null;
+  source: string | null;
   created_at: string;
   status: string | null;
 };
+
+/** portal_inquiries select — and its fallback while the `source` column
+ *  migration (supabase/portal-telemetry.sql) hasn't been run yet. */
+const INQUIRY_COLS = "service_slug,category,campaign,lead_id,source,created_at,status";
+const LEGACY_INQUIRY_COLS = INQUIRY_COLS.replace(",source", "");
 
 const EMPTY_SUMMARY = {
   totals: { attributionClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0, uniqueVisitors: 0 },
   byService: [] as Array<{ service: string; opens: number; inquiries: number }>,
   byCategory: [] as Array<{ category: string; clicks: number; views: number; inquiries: number }>,
+  bySource: [] as Array<{ source: string; visitors: number; views: number; inquiries: number }>,
   recentEvents: [] as Array<{
     event: string;
     service: string | null;
     category: string | null;
     campaign: string | null;
+    source: string | null;
     createdAt: string;
   }>,
 };
@@ -81,6 +91,13 @@ export async function GET(req: Request): Promise<Response> {
     return Response.json({ ok: false, mode: "live", ...EMPTY_SUMMARY, error: "Portal storage is misconfigured." }, { status: 500 });
   }
 
+  const listInquiries = (cols: string) =>
+    restGet(
+      target.base,
+      target.key,
+      `portal_inquiries?select=${cols}&order=created_at.desc&limit=${INQUIRIES_LIMIT}`,
+    );
+
   let eventsRes: Response;
   let inquiriesRes: Response;
   try {
@@ -90,12 +107,19 @@ export async function GET(req: Request): Promise<Response> {
         target.key,
         `portal_events?select=event,props,lead_id,campaign,category,visitor_id,created_at&order=created_at.desc&limit=${EVENTS_LIMIT}`,
       ),
-      restGet(
-        target.base,
-        target.key,
-        `portal_inquiries?select=service_slug,category,campaign,created_at,status&order=created_at.desc&limit=${INQUIRIES_LIMIT}`,
-      ),
+      listInquiries(INQUIRY_COLS),
     ]);
+    // `source` column not migrated in yet — aggregate without it (source
+    // buckets fall back to outreach/direct) rather than failing the tab.
+    if (!inquiriesRes.ok) {
+      const detail = await inquiriesRes.clone().text().catch(() => "");
+      if (isMissingColumn(detail)) {
+        console.error(
+          "[portal/summary] portal_inquiries.source column missing — run supabase/portal-telemetry.sql; aggregating without source.",
+        );
+        inquiriesRes = await listInquiries(LEGACY_INQUIRY_COLS);
+      }
+    }
   } catch (e) {
     console.error("[portal/summary] fetch to Supabase failed:", e);
     return Response.json({ ok: false, mode: "live", ...EMPTY_SUMMARY, error: "Could not reach the database." }, { status: 502 });
@@ -123,6 +147,7 @@ export async function GET(req: Request): Promise<Response> {
   const visitors = new Set<string>();
   const byServiceMap = new Map<string, { opens: number; inquiries: number }>();
   const byCategoryMap = new Map<string, { clicks: number; views: number; inquiries: number }>();
+  const bySourceMap = new Map<string, { visitors: Set<string>; views: number; inquiries: number }>();
   const recentEvents: typeof EMPTY_SUMMARY.recentEvents = [];
 
   const serviceBucket = (service: string) => {
@@ -135,11 +160,23 @@ export async function GET(req: Request): Promise<Response> {
     if (!b) byCategoryMap.set(category, (b = { clicks: 0, views: 0, inquiries: 0 }));
     return b;
   };
+  const sourceBucket = (source: string) => {
+    let b = bySourceMap.get(source);
+    if (!b) bySourceMap.set(source, (b = { visitors: new Set(), views: 0, inquiries: 0 }));
+    return b;
+  };
+  /** Which traffic channel a row belongs to: an explicit source (the apmg_src
+   *  cookie — TikTok/Facebook/Instagram promotion) wins; otherwise an
+   *  outreach-attributed row files under "outreach", the rest under "direct". */
+  const channelOf = (source: string | null, leadId: string | null) =>
+    source ?? (leadId ? OUTREACH_SOURCE : DIRECT_SOURCE);
 
   for (const row of eventRows) {
     if (!row || !PORTAL_EVENT_NAMES.has(row.event)) continue;
     const rawService = row.props?.service;
     const service = typeof rawService === "string" && rawService ? rawService : null;
+    const rawSource = row.props?.source;
+    const source = typeof rawSource === "string" && rawSource ? rawSource : null;
 
     if (row.event === "attribution_click") {
       totals.attributionClicks += 1;
@@ -148,6 +185,9 @@ export async function GET(req: Request): Promise<Response> {
       totals.portalViews += 1;
       categoryBucket(row.category ?? DIRECT).views += 1;
       if (row.visitor_id) visitors.add(row.visitor_id);
+      const src = sourceBucket(channelOf(source, row.lead_id));
+      src.views += 1;
+      if (row.visitor_id) src.visitors.add(row.visitor_id);
     } else if (row.event === "portal_service_open") {
       totals.serviceOpens += 1;
       if (service) serviceBucket(service).opens += 1;
@@ -160,6 +200,7 @@ export async function GET(req: Request): Promise<Response> {
         service,
         category: row.category ?? null,
         campaign: row.campaign ?? null,
+        source,
         createdAt: row.created_at,
       });
     }
@@ -173,6 +214,7 @@ export async function GET(req: Request): Promise<Response> {
     if (!row) continue;
     serviceBucket(row.service_slug || "general").inquiries += 1;
     categoryBucket(row.category ?? DIRECT).inquiries += 1;
+    sourceBucket(channelOf(row.source ?? null, row.lead_id ?? null)).inquiries += 1;
   }
 
   const byService = [...byServiceMap.entries()]
@@ -181,6 +223,9 @@ export async function GET(req: Request): Promise<Response> {
   const byCategory = [...byCategoryMap.entries()]
     .map(([category, counts]) => ({ category, ...counts }))
     .sort((a, b) => b.clicks + b.views + b.inquiries - (a.clicks + a.views + a.inquiries));
+  const bySource = [...bySourceMap.entries()]
+    .map(([source, b]) => ({ source, visitors: b.visitors.size, views: b.views, inquiries: b.inquiries }))
+    .sort((a, b) => b.views + b.inquiries - (a.views + a.inquiries));
 
-  return Response.json({ ok: true, mode: "live", totals, byService, byCategory, recentEvents });
+  return Response.json({ ok: true, mode: "live", totals, byService, byCategory, bySource, recentEvents });
 }

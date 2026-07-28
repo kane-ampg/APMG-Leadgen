@@ -15,6 +15,8 @@
  * enquiring about one of the eight APMG services.
  */
 
+import { DIRECT_SOURCE, OUTREACH_SOURCE } from "@/lib/portal/source";
+
 /* ───────────────────────────  API contract types  ─────────────────────────── */
 
 /** Enquiry triage states — mirrors INQUIRY_STATUSES in lib/portal/server.ts
@@ -42,6 +44,10 @@ export interface PortalInquiry {
   business: string | null;
   campaign: string | null;
   category: string | null;
+  /** Traffic source the enquirer arrived from ("tiktok" / "facebook" /
+   *  "instagram" / …) — the apmg_src cookie set by a ?utm_source= tagged
+   *  portal visit or a social Referer. Null = untagged (outreach or direct). */
+  source: string | null;
   status: InquiryStatus;
   createdAt: string;
 }
@@ -67,12 +73,17 @@ export interface PortalSummary {
   /** per-sector journey (CSV category the lead was scraped under);
    *  the route maps a null category to "Direct / unknown" */
   byCategory: Array<{ category: string; clicks: number; views: number; inquiries: number }>;
+  /** traffic channel rollup — where portal visitors and enquiries came from:
+   *  social slugs ("tiktok" / "facebook" / "instagram" / …) from tagged links
+   *  or social referers, plus the OUTREACH_SOURCE / DIRECT_SOURCE buckets */
+  bySource: Array<{ source: string; visitors: number; views: number; inquiries: number }>;
   /** first 30 portal-relevant events, newest first */
   recentEvents: Array<{
     event: string;
     service: string | null;
     category: string | null;
     campaign: string | null;
+    source: string | null;
     createdAt: string;
   }>;
 }
@@ -99,6 +110,25 @@ export function serviceLabel(slug: string): string {
 
 /** Bucket name the summary route uses for unattributed traffic. */
 export const DIRECT_CATEGORY = "Direct / unknown";
+
+/** Display names for the traffic-source slugs (bySource rollup + the enquiry
+ *  source chip). Slugs come from lib/portal/source.ts — utm_source values on
+ *  the promoted portal link, plus the outreach/direct fallback buckets. */
+export const SOURCE_LABEL: Record<string, string> = {
+  tiktok: "TikTok",
+  facebook: "Facebook",
+  instagram: "Instagram",
+  x: "X (Twitter)",
+  linkedin: "LinkedIn",
+  youtube: "YouTube",
+  google: "Google",
+  [OUTREACH_SOURCE]: "Outreach email",
+  [DIRECT_SOURCE]: DIRECT_CATEGORY,
+};
+
+export function sourceLabel(slug: string): string {
+  return SOURCE_LABEL[slug] ?? slug.charAt(0).toUpperCase() + slug.slice(1);
+}
 
 /* ───────────────────────────  demo dataset  ─────────────────────────── */
 
@@ -136,15 +166,25 @@ export const DEMO_SUMMARY: PortalSummary = {
     { category: "Schools & education", clicks: 19, views: 14, inquiries: 1 },
     { category: DIRECT_CATEGORY, clicks: 0, views: 5, inquiries: 1 },
   ],
+  // Traffic channels — outreach email still dominates, the social links are
+  // starting to move (reconciles with totals: 61 visitors / 118 views / 8 enq)
+  bySource: [
+    { source: OUTREACH_SOURCE, visitors: 38, views: 74, inquiries: 7 },
+    { source: "tiktok", visitors: 10, views: 19, inquiries: 1 },
+    { source: "facebook", visitors: 6, views: 12, inquiries: 0 },
+    { source: "instagram", visitors: 4, views: 8, inquiries: 0 },
+    { source: DIRECT_SOURCE, visitors: 3, views: 5, inquiries: 0 },
+  ],
   recentEvents: [
-    { event: "portal_inquiry", service: "painting", category: "Childcare & early learning", campaign: "childcare-melb-jul", createdAt: hoursAgo(1) },
-    { event: "portal_service_open", service: "painting", category: "Childcare & early learning", campaign: "childcare-melb-jul", createdAt: hoursAgo(1.1) },
-    { event: "portal_view", service: null, category: "Childcare & early learning", campaign: "childcare-melb-jul", createdAt: hoursAgo(1.2) },
-    { event: "attribution_click", service: null, category: "Childcare & early learning", campaign: "childcare-melb-jul", createdAt: hoursAgo(1.2) },
-    { event: "portal_service_open", service: "make-safe", category: "Aged care & retirement living", campaign: "aged-care-melb-jul", createdAt: hoursAgo(4) },
-    { event: "portal_view", service: null, category: null, campaign: null, createdAt: hoursAgo(6) },
-    { event: "portal_service_open", service: "plumbing", category: "Body corporate & strata", campaign: "strata-melb-jun", createdAt: hoursAgo(9) },
-    { event: "attribution_click", service: null, category: "Schools & education", campaign: "schools-melb-jul", createdAt: hoursAgo(12) },
+    { event: "portal_inquiry", service: "painting", category: "Childcare & early learning", campaign: "childcare-melb-jul", source: null, createdAt: hoursAgo(1) },
+    { event: "portal_service_open", service: "painting", category: "Childcare & early learning", campaign: "childcare-melb-jul", source: null, createdAt: hoursAgo(1.1) },
+    { event: "portal_view", service: null, category: "Childcare & early learning", campaign: "childcare-melb-jul", source: null, createdAt: hoursAgo(1.2) },
+    { event: "attribution_click", service: null, category: "Childcare & early learning", campaign: "childcare-melb-jul", source: null, createdAt: hoursAgo(1.2) },
+    { event: "portal_view", service: null, category: null, campaign: null, source: "instagram", createdAt: hoursAgo(3) },
+    { event: "portal_service_open", service: "make-safe", category: "Aged care & retirement living", campaign: "aged-care-melb-jul", source: null, createdAt: hoursAgo(4) },
+    { event: "portal_view", service: null, category: null, campaign: null, source: "tiktok", createdAt: hoursAgo(6) },
+    { event: "portal_service_open", service: "plumbing", category: "Body corporate & strata", campaign: "strata-melb-jun", source: null, createdAt: hoursAgo(9) },
+    { event: "attribution_click", service: null, category: "Schools & education", campaign: "schools-melb-jul", source: null, createdAt: hoursAgo(12) },
   ],
 };
 
@@ -163,6 +203,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     business: "Little Sprouts Early Learning",
     campaign: "childcare-melb-jul",
     category: "Childcare & early learning",
+    source: null,
     status: "new",
     createdAt: hoursAgo(1),
   },
@@ -179,6 +220,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     business: "Banksia Gardens Aged Care",
     campaign: "aged-care-melb-jul",
     category: "Aged care & retirement living",
+    source: null,
     status: "contacted",
     createdAt: hoursAgo(5),
   },
@@ -195,6 +237,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     business: "Horizon Body Corporate Services",
     campaign: "strata-melb-jun",
     category: "Body corporate & strata",
+    source: null,
     status: "new",
     createdAt: hoursAgo(11),
   },
@@ -211,6 +254,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     business: "Merri Creek Primary School",
     campaign: "schools-melb-jul",
     category: "Schools & education",
+    source: null,
     status: "contacted",
     createdAt: hoursAgo(26),
   },
@@ -227,6 +271,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     business: "Collins Street Property Group",
     campaign: "commercial-pm-jun",
     category: "Commercial property management",
+    source: null,
     status: "new",
     createdAt: hoursAgo(31),
   },
@@ -243,6 +288,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     business: null,
     campaign: null,
     category: null,
+    source: "tiktok",
     status: "new",
     createdAt: hoursAgo(50),
   },
@@ -259,6 +305,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     business: "Bright Beginnings Childcare",
     campaign: "childcare-melb-jul",
     category: "Childcare & early learning",
+    source: null,
     status: "contacted",
     createdAt: hoursAgo(74),
   },
@@ -275,6 +322,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     business: "Wattle Grove Retirement Village",
     campaign: "aged-care-melb-jul",
     category: "Aged care & retirement living",
+    source: null,
     status: "closed",
     createdAt: hoursAgo(96),
   },

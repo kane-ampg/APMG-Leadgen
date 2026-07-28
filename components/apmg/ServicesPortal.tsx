@@ -45,6 +45,7 @@ import photoMakeSafe from "@/app/services/make-safe.png";
 import { track } from "@/lib/telemetry";
 import { Reveal } from "./Reveal";
 import { Footer } from "./Footer";
+import { SocialLinks } from "./SocialLinks";
 import { PortalUnsubscribe } from "./PortalUnsubscribe";
 import { PortalChat } from "./PortalChat";
 import { ServiceInquiryModal } from "./ServiceInquiryModal";
@@ -432,19 +433,40 @@ export function ServicesPortal({ standalone = false }: { standalone?: boolean })
             aria-hidden
             className="absolute inset-0 bg-gradient-to-r from-primary/15 via-transparent to-transparent"
           />
+          {/* light top band so the logo + social icons stay legible over the
+              photo's bright sky without darkening the whole frame */}
+          <div
+            aria-hidden
+            className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/55 to-transparent"
+          />
 
-          {/* inset-0 + justify-end keeps the stack bottom-weighted but CLAMPED
-              inside the box, so the logo at the top of the stack can never be
-              clipped by the section's overflow-hidden (was bottom-0, which let
-              a tall stack overflow past the top edge). */}
-          <div className="absolute inset-0 flex flex-col justify-end gap-2 p-5 sm:gap-3 sm:p-8">
+          {/* Top bar: logo anchored top-left so the brand is the first thing
+              the page shows (it used to sit in the bottom stack, i.e. below
+              the fold of the hero photo), socials top-right — checkable
+              proof-of-life for a visitor deciding whether the business is
+              real. z-10 lifts it above the inset-0 copy stack below (later in
+              DOM order, so it would otherwise swallow clicks on the icons);
+              pointer-events-none/auto keeps everything except the icons
+              click-transparent so the stack's own controls stay reachable. */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between p-5 sm:p-8">
             <Image
               src={brandLogo}
               alt="APMG"
               width={240}
               height={184}
-              className="h-10 w-auto self-start drop-shadow-[0_2px_12px_rgba(0,0,0,0.9)] sm:h-16"
+              className="h-10 w-auto drop-shadow-[0_2px_12px_rgba(0,0,0,0.9)] sm:h-16"
             />
+            <SocialLinks
+              linkClassName="pointer-events-auto rounded-full border border-white/20 bg-black/40 p-2 text-white/90 backdrop-blur-sm transition-colors hover:bg-black/60 hover:text-white"
+              iconClassName="h-3.5 w-3.5 sm:h-4 sm:w-4"
+            />
+          </div>
+
+          {/* inset-0 + justify-end keeps the stack bottom-weighted but CLAMPED
+              inside the box, so a tall stack can never be clipped by the
+              section's overflow-hidden (was bottom-0, which let it overflow
+              past the top edge). */}
+          <div className="absolute inset-0 flex flex-col justify-end gap-2 p-5 sm:gap-3 sm:p-8">
             <span className="inline-flex w-fit items-center gap-2 rounded-full border border-white/20 bg-black/40 px-2.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-white backdrop-blur-sm">
               <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-primary shadow-[0_0_8px_2px_hsl(var(--primary)/0.7)]" />
               APMG Services

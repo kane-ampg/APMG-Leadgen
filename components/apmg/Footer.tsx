@@ -1,5 +1,6 @@
-import Link from "next/link";
 import { COMPANY } from "@/lib/legal/company";
+import { LegalLink } from "./LegalDocModal";
+import { SocialLinks } from "./SocialLinks";
 
 /** Page footer, host-aware (ui-standards §17.8).
  *
@@ -10,7 +11,8 @@ import { COMPANY } from "@/lib/legal/company";
  *  footer instead. A cold outreach recipient scans the footer for exactly four
  *  things — who you are, where you are, how to call you, and your privacy
  *  terms — so that's what it carries: trading name + address + phone + email,
- *  and links to the public Terms/Privacy pages. The "AI Team" credit is
+ *  social profiles (checkable third-party proof the business is real), and
+ *  links to the public Terms/Privacy pages. The "AI Team" credit is
  *  deliberately NOT shown here: on a page reached from unsolicited email,
  *  volunteering "AI" confirms the visitor's exact suspicion. (ABN joins the
  *  identity line automatically once lib/legal/company.ts has it — we never
@@ -48,17 +50,27 @@ export function Footer({ consoleTag = true }: { consoleTag?: boolean }) {
           >
             {COMPANY.contactEmail}
           </a>
+          {/* Social profiles ride the same "is this business real?" scan as
+              the phone + address — third-party pages the visitor can check. */}
+          <SocialLinks
+            className="gap-3"
+            linkClassName="transition-colors hover:text-primary"
+            iconClassName="h-3.5 w-3.5"
+          />
         </span>
       </div>
       <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
         <span>© {year} {COMPANY.tradingName}. All rights reserved.</span>
+        {/* Modal, not navigation: checking the fine print shouldn't cost the
+            visitor their place on the page. The shareable /portal/terms +
+            /portal/privacy URLs stay live (linked from inside the modal). */}
         <span className="flex items-center gap-4">
-          <Link href="/portal/terms" className="transition-colors hover:text-primary">
+          <LegalLink doc="terms" className="transition-colors hover:text-primary">
             Terms &amp; Conditions
-          </Link>
-          <Link href="/portal/privacy" className="transition-colors hover:text-primary">
+          </LegalLink>
+          <LegalLink doc="privacy" className="transition-colors hover:text-primary">
             Privacy Policy
-          </Link>
+          </LegalLink>
         </span>
       </div>
     </footer>

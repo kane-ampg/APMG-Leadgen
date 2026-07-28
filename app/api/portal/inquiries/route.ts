@@ -265,7 +265,7 @@ export async function POST(req: Request): Promise<Response> {
     const referer = req.headers.get("referer")?.slice(0, 600) ?? null;
     // Traffic source rides in props on BOTH events, same as the beacon sink
     // stamps it — so the funnel aggregations can group by source uniformly.
-    const sourceProp = source ? { source } : {};
+    const sourceProp: Record<string, string> = source ? { source } : {};
     await insertPortalEvents(target.base, target.key, [
       {
         // The consent gate above proved this enquirer accepted the CURRENT

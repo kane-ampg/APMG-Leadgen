@@ -9,7 +9,7 @@
  */
 
 /** Base URL of the n8n instance these automations live on. */
-export const N8N_BASE_URL = "https://apmg.app.n8n.cloud";
+export const N8N_BASE_URL = "https://apmgau.app.n8n.cloud";
 
 export type TriggerKind = "webhook" | "schedule" | "event";
 /** connected = configured + toggle on (live); paused = configured but toggled

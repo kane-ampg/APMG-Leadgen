@@ -59,8 +59,11 @@ export const SETTING_EMAIL_FINDER_ENABLED = "n8n_email_finder_webhook_enabled";
  *  SQL migration needed, since these are single config values. */
 export const SETTING_ENQUIRY_NOTIFY_WEBHOOK = "n8n_enquiry_notify_webhook_url";
 export const SETTING_ENQUIRY_NOTIFY_ENABLED = "n8n_enquiry_notify_webhook_enabled";
-/** app_settings key holding the address enquiry notifications are emailed TO
- *  (set on the Integrations tab). Passed to the n8n notify workflow as `notifyTo`. */
+/** app_settings key holding the address(es) enquiry notifications are emailed TO
+ *  (set on the Integrations tab) — one address, or several as a comma-separated
+ *  list, parsed by `lib/pipeline/notifyEmails.ts`. Still a scalar string, so it
+ *  stays outside the JSON-blob convention used by `sector_playbooks`. Passed to
+ *  the n8n notify workflow as `notifyTo` (one send, all recipients). */
 export const SETTING_ENQUIRY_NOTIFY_EMAIL = "enquiry_notify_email";
 
 /** app_settings key holding the Sector Playbooks config (JSON): per-sector

@@ -4,8 +4,9 @@
  *
  * - CSV: RFC-4180 quoting with a UTF-8 BOM so Excel opens it correctly.
  * - XLSX: a real Office Open XML workbook written by hand — a stored (no
- *   compression) ZIP containing the minimal five parts Excel needs, with
- *   inline strings, a frozen bold header row and sensible column widths.
+ *   compression) ZIP containing the minimal parts Excel needs, with inline
+ *   strings, a frozen bold header row and sensible column widths. Rows that
+ *   span more than one import folder are split into one sheet per folder.
  * - PDF: the browser's print pipeline — open a window synchronously on
  *   click, write a print-styled A4 landscape document, auto window.print()
  *   so the user lands in "Save as PDF". Popup-blocker safe because the
@@ -14,6 +15,10 @@
  * Every export receives the rows already scoped by the caller (the open
  * folder, the search filter, and any checkbox selection), so what you see
  * is exactly what you get.
+ *
+ * Multi-folder exports keep the folders apart in whichever way the format
+ * allows: separate sheets (XLSX), folder-ordered rows plus the Folder column
+ * (CSV), and folder section headings (PDF).
  */
 
 import { bestEmail } from "@/lib/pipeline/campaign";
@@ -56,6 +61,39 @@ export const LEAD_EXPORT_COLUMNS: ExportColumn[] = [
   { header: "Imported at", width: 22, value: (r) => r.created_at ?? null },
 ];
 
+/* ── folder grouping ─────────────────────────────────────────────────────── */
+
+// keep in sync with UNGROUPED in lib/pipeline/server.ts
+const UNGROUPED = "__ungrouped__";
+
+export interface LeadGroup {
+  /** Display name — the folder, or "Ungrouped" for leads with no batch. */
+  name: string;
+  rows: LeadView[];
+}
+
+const folderKey = (r: LeadView) => r.batch?.trim() || UNGROUPED;
+
+/** Split rows into one group per import folder — alphabetical, Ungrouped last.
+ *  A single-folder scope (or a pre-folders flat list) comes back as one group. */
+export function groupLeadsByFolder(rows: LeadView[]): LeadGroup[] {
+  const map = new Map<string, LeadView[]>();
+  for (const r of rows) {
+    const key = folderKey(r);
+    const bucket = map.get(key);
+    if (bucket) bucket.push(r);
+    else map.set(key, [r]);
+  }
+  return [...map.entries()]
+    .sort(([a], [b]) => (a === UNGROUPED ? 1 : b === UNGROUPED ? -1 : a.localeCompare(b)))
+    .map(([key, groupRows]) => ({ name: key === UNGROUPED ? "Ungrouped" : key, rows: groupRows }));
+}
+
+/** How many distinct folders a set of rows spans (drives the menu's hints). */
+export function leadFolderCount(rows: LeadView[]): number {
+  return new Set(rows.map(folderKey)).size;
+}
+
 /* ── filenames + download plumbing ───────────────────────────────────────── */
 
 function fileSlug(scope: string): string {
@@ -93,9 +131,13 @@ function csvField(v: string | number | null): string {
 }
 
 export function exportLeadsCsv(rows: LeadView[], scope: string) {
+  // One flat file can't hold sheets, so a multi-folder export is at least
+  // ordered folder-by-folder — the Folder column carries the split.
+  const groups = groupLeadsByFolder(rows);
+  const ordered = groups.length > 1 ? groups.flatMap((g) => g.rows) : rows;
   const lines = [
     LEAD_EXPORT_COLUMNS.map((c) => csvField(c.header)).join(","),
-    ...rows.map((r) => LEAD_EXPORT_COLUMNS.map((c) => csvField(c.value(r))).join(",")),
+    ...ordered.map((r) => LEAD_EXPORT_COLUMNS.map((c) => csvField(c.value(r))).join(",")),
   ];
   // BOM so Excel detects UTF-8 (business names/addresses can be non-ASCII)
   const blob = new Blob(["\uFEFF" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
@@ -220,7 +262,21 @@ function sheetCell(col: number, row: number, v: string | number | null, styleId:
   return `<c r="${ref}"${s} t="inlineStr"><is><t xml:space="preserve">${xmlEsc(String(v))}</t></is></c>`;
 }
 
-export function exportLeadsXlsx(rows: LeadView[], scope: string) {
+/** Excel sheet-name rules: 1–31 chars, none of []:*?/\, unique in a workbook. */
+function safeSheetName(raw: string, used: Set<string>, index: number): string {
+  let base = raw.replace(/[[\]:*?/\\]/g, " ").replace(/\s+/g, " ").trim().slice(0, 31);
+  if (!base) base = `Sheet ${index + 1}`;
+  let name = base;
+  for (let n = 2; used.has(name.toLowerCase()); n++) {
+    const suffix = ` (${n})`;
+    name = base.slice(0, 31 - suffix.length) + suffix;
+  }
+  used.add(name.toLowerCase());
+  return name;
+}
+
+/** One worksheet part: frozen bold header row, one row per lead. */
+function worksheetXml(rows: LeadView[]): string {
   const cols = LEAD_EXPORT_COLUMNS.map(
     (c, i) => `<col min="${i + 1}" max="${i + 1}" width="${c.width}" customWidth="1"/>`,
   ).join("");
@@ -233,25 +289,50 @@ export function exportLeadsXlsx(rows: LeadView[], scope: string) {
     )
     .join("");
 
-  const sheet =
+  return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
     `<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>` +
     `<cols>${cols}</cols>` +
     `<sheetData>${headerRow}${dataRows}</sheetData>` +
-    `</worksheet>`;
+    `</worksheet>`
+  );
+}
+
+export function exportLeadsXlsx(rows: LeadView[], scope: string) {
+  // Rows spanning several folders become one sheet per folder (named after it);
+  // a single-folder scope stays a single "Leads" sheet.
+  const groups = groupLeadsByFolder(rows);
+  const used = new Set<string>();
+  const sheets =
+    groups.length > 1
+      ? groups.map((g, i) => ({ name: safeSheetName(g.name, used, i), rows: g.rows }))
+      : [{ name: "Leads", rows }];
+
+  const sheetParts = sheets.map((s, i) => ({
+    name: `xl/worksheets/sheet${i + 1}.xml`,
+    text: worksheetXml(s.rows),
+  }));
+  const stylesRelId = `rId${sheets.length + 1}`;
 
   const workbook =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
-    `<sheets><sheet name="Leads" sheetId="1" r:id="rId1"/></sheets>` +
+    `<sheets>${sheets
+      .map((s, i) => `<sheet name="${xmlEsc(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`)
+      .join("")}</sheets>` +
     `</workbook>`;
 
   const workbookRels =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
     `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
-    `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>` +
-    `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
+    sheets
+      .map(
+        (_s, i) =>
+          `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`,
+      )
+      .join("") +
+    `<Relationship Id="${stylesRelId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
     `</Relationships>`;
 
   // style 0 = default, style 1 = bold (the header row)
@@ -277,7 +358,12 @@ export function exportLeadsXlsx(rows: LeadView[], scope: string) {
     `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
     `<Default Extension="xml" ContentType="application/xml"/>` +
     `<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>` +
-    `<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>` +
+    sheets
+      .map(
+        (_s, i) =>
+          `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
+      )
+      .join("") +
     `<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>` +
     `</Types>`;
 
@@ -287,7 +373,7 @@ export function exportLeadsXlsx(rows: LeadView[], scope: string) {
     { name: "xl/workbook.xml", text: workbook },
     { name: "xl/_rels/workbook.xml.rels", text: workbookRels },
     { name: "xl/styles.xml", text: styles },
-    { name: "xl/worksheets/sheet1.xml", text: sheet },
+    ...sheetParts,
   ]);
   downloadBlob(blob, exportFilename(scope, "xlsx"));
 }
@@ -316,12 +402,11 @@ function buildLeadsPdfHtml(rows: LeadView[], scope: string): string {
     minute: "2-digit",
   });
 
-  const body = rows
-    .map((r, i) => {
-      const email = bestEmail(r.emails);
-      const rating = asRating(r.rating);
-      const socials = (r.social_medias ?? []).filter(Boolean).length;
-      return `<tr>
+  const leadRow = (r: LeadView, i: number) => {
+    const email = bestEmail(r.emails);
+    const rating = asRating(r.rating);
+    const socials = (r.social_medias ?? []).filter(Boolean).length;
+    return `<tr>
         <td class="r num mut">${i + 1}</td>
         <td><b>${htmlEsc(r.name)}</b>${r.address ? `<span class="sub">${htmlEsc(r.address)}</span>` : ""}</td>
         <td class="wrap">${r.website ? htmlEsc(prettyUrl(r.website)) : "—"}</td>
@@ -331,8 +416,22 @@ function buildLeadsPdfHtml(rows: LeadView[], scope: string): string {
         <td>${r.category ? htmlEsc(r.category) : "—"}</td>
         <td class="r num">${socials || "—"}</td>
       </tr>`;
-    })
-    .join("");
+  };
+
+  // Multi-folder exports get a banded heading row per folder (the print
+  // equivalent of the workbook's one-sheet-per-folder split), numbered per folder.
+  const groups = groupLeadsByFolder(rows);
+  const grouped = groups.length > 1;
+  const body = grouped
+    ? groups
+        .map(
+          (g) =>
+            `<tr class="grp"><td colspan="8">${htmlEsc(g.name)} · ${g.rows.length.toLocaleString(
+              "en-US",
+            )} lead${g.rows.length === 1 ? "" : "s"}</td></tr>` + g.rows.map(leadRow).join(""),
+        )
+        .join("")
+    : rows.map(leadRow).join("");
 
   return `<!doctype html>
 <html lang="en">
@@ -368,6 +467,8 @@ function buildLeadsPdfHtml(rows: LeadView[], scope: string): string {
   td { border-bottom: 1px solid var(--line); padding: 5px 7px; vertical-align: top; }
   th.r, td.r { text-align: right; }
   tr { break-inside: avoid; }
+  tr.grp td { background: #f3f3f5; font-size: 9px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .1em; padding: 5px 7px; break-after: avoid; }
   thead { display: table-header-group; }
   td .sub { display: block; font-size: 9px; color: var(--mut); }
   td.wrap { word-break: break-all; max-width: 150px; }
@@ -391,7 +492,11 @@ function buildLeadsPdfHtml(rows: LeadView[], scope: string): string {
   <h1>Leads — ${htmlEsc(scope)}</h1>
   <div class="lede">Business details, contact channels and ratings for the ${rows.length.toLocaleString(
     "en-US",
-  )} exported lead${rows.length === 1 ? "" : "s"}. The CSV/XLSX exports carry every captured field, including all emails and social links.</div>
+  )} exported lead${rows.length === 1 ? "" : "s"}${
+    grouped ? `, grouped into ${groups.length} folders` : ""
+  }. The CSV/XLSX exports carry every captured field, including all emails and social links${
+    grouped ? " — the workbook puts each folder on its own sheet" : ""
+  }.</div>
 
   <table>
     <thead><tr>

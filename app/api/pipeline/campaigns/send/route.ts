@@ -9,7 +9,16 @@ import {
   safeCampaignTag,
   trackedLink,
 } from "@/lib/pipeline/campaign";
-import { campaignWebhook, isUuid, sameOrigin, supabaseTarget, webhookAuthHeaders } from "@/lib/pipeline/server";
+import {
+  campaignWebhook,
+  isUuid,
+  publicObjectUrl,
+  sameOrigin,
+  SECTOR_ASSETS_BUCKET,
+  supabaseTarget,
+  webhookAuthHeaders,
+} from "@/lib/pipeline/server";
+import { serviceBySlug } from "@/lib/pipeline/services";
 import { loadPlaybooks, playbookPdfUrl } from "@/lib/pipeline/sectorStore";
 import { resolveSectorForCategory } from "@/lib/pipeline/sectors";
 import { fetchSuppressedEmails, insertPortalEvents } from "@/lib/portal/server";
@@ -22,10 +31,13 @@ import { fetchSuppressedEmails, insertPortalEvents } from "@/lib/portal/server";
 // n8n webhook (the "Send a message" Gmail node); otherwise we simulate a
 // successful send (demo mode), mirroring the CSV importer.
 //
-// Webhook payload: { campaign, messages: [{ to, leadId, subject, text, attachment? }] }.
+// Webhook payload: { campaign, messages: [{ to, leadId, subject, text, attachment?, hero?, hero_alt? }] }.
 // `text` is the PLAIN-TEXT body (HTML flattened via htmlToText) — the Gmail node
 // owns all formatting. The tracked CTA link is kept inline as "label (url)" so a
-// click still hits /t/<lead> and attributes to the campaign.
+// click still hits /t/<lead> and attributes to the campaign. `hero`/`hero_alt`
+// (present when a service template was picked on Step 2) swap the branded
+// email's hero image to that service's photo; absent, n8n keeps its default
+// team photo.
 //
 // SECURITY — TODO before exposing publicly: like the other pipeline routes this
 // has only a same-origin (CSRF) floor, NOT real auth. The UI gates the action
@@ -210,6 +222,12 @@ export async function POST(req: Request): Promise<Response> {
   // sectors without a PDF simply send with no attachment. n8n downloads
   // `attachment.url` and attaches it as `attachment.filename`.
   const playbooks = await loadPlaybooks();
+  // Service template picked on Step 2 (one per send) — resolves to the public
+  // Storage URL of that service's photo, sent as the branded email's hero so
+  // the image always matches the service being pitched. Unknown slug / no
+  // Supabase → no hero field → n8n falls back to its default team photo.
+  const service = serviceBySlug(typeof b.service === "string" ? b.service : null);
+  const heroUrl = service ? publicObjectUrl(SECTOR_ASSETS_BUCKET, service.image) : null;
   const messages = recipients.map((r) => {
     const sector = resolveSectorForCategory(r.category, playbooks);
     const attachmentUrl = sector?.pdf ? playbookPdfUrl(sector) : null;
@@ -224,6 +242,9 @@ export async function POST(req: Request): Promise<Response> {
       text: htmlToText(html),
       // Omitted (undefined → dropped by JSON.stringify) when no PDF applies.
       attachment: attachmentUrl && sector?.pdf ? { url: attachmentUrl, filename: sector.pdf.name } : undefined,
+      // Omitted when no service template was picked — n8n keeps its default hero.
+      hero: heroUrl ?? undefined,
+      hero_alt: heroUrl && service ? service.imageAlt : undefined,
     };
   });
 

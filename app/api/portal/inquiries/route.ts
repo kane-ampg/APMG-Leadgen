@@ -22,6 +22,7 @@ import {
 } from "@/lib/portal/server";
 import { loadLegalDocs } from "@/lib/legal/legalStore";
 import { isPlaceholderLegal, isValidVersion } from "@/lib/legal/legalDocs";
+import { parseNotifyEmails } from "@/lib/pipeline/notifyEmails";
 
 // Portal enquiries — the lead-qualifying end of the services portal.
 //   POST  — the ServiceInquiryModal submits here: honeypot-screened, validated,
@@ -323,22 +324,31 @@ export async function POST(req: Request): Promise<Response> {
 }
 
 /** Fire the enquiry-notification webhook (n8n → Gmail). Best-effort: resolves
- *  the webhook + toggle, requires a configured `notifyTo` address, and swallows
- *  every error so a notification problem can never affect the stored enquiry or
- *  the customer response. Bounded so a hung webhook can't wedge the request. */
+ *  the webhook + toggle, requires at least one configured `notifyTo` address
+ *  (comma-separated list → ONE Gmail send addressed to all of them), and
+ *  swallows every error so a notification problem can never affect the stored
+ *  enquiry or the customer response. Bounded so a hung webhook can't wedge the
+ *  request. */
 async function notifyOperator(input: {
   to: string;
   enquiry: Record<string, unknown>;
 }): Promise<void> {
   try {
-    const to = input.to.trim();
-    if (!to) return; // no address set on the Integrations tab → nothing to do
+    // Parse rather than just truthiness-check: a malformed stored value should
+    // skip the send instead of POSTing junk that n8n silently drops (this whole
+    // path returns 200 regardless, so a bad send is otherwise invisible).
+    const parsed = parseNotifyEmails(input.to);
+    if (!parsed.ok || parsed.emails.length === 0) return; // nothing set on the Integrations tab
     const target = await enquiryNotifyWebhook();
     if (target.state !== "ok") return; // demo / not configured / toggled off
+    // Deliberately ONE request with every recipient joined, never one request
+    // per address: a single Gmail send counts once against the 2,000
+    // messages/day cap, whereas looping would multiply it and can lock the
+    // sending mailbox out for up to 24h.
     await fetch(target.url, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...webhookAuthHeaders() },
-      body: JSON.stringify({ notifyTo: to, enquiry: input.enquiry }),
+      body: JSON.stringify({ notifyTo: parsed.value, enquiry: input.enquiry }),
       signal: AbortSignal.timeout(10_000),
     });
   } catch (e) {

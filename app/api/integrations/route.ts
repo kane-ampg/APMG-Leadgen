@@ -1,4 +1,5 @@
 import { INTEGRATIONS, type IntegrationState } from "@/lib/data/integrations";
+import { parseNotifyEmails } from "@/lib/pipeline/notifyEmails";
 import {
   deleteSetting,
   readSetting,
@@ -7,9 +8,6 @@ import {
   writeSetting,
   SETTING_ENQUIRY_NOTIFY_EMAIL,
 } from "@/lib/pipeline/server";
-
-/** Same address shape the enquiry validator + n8n Gmail node accept. */
-const EMAIL_RE = /^[^\s@?&=#]+@[^\s@?&=#]+\.[^\s@?&=#]+$/;
 
 // Realtime state + configuration for the app's n8n integrations (Integrations
 // tab). GET resolves each integration's live wiring (a URL saved from this tab
@@ -100,12 +98,21 @@ export async function POST(req: Request): Promise<Response> {
   }
   const b = (body ?? {}) as Record<string, unknown>;
 
-  // Global (not per-integration) setting: the enquiry notification address.
+  // Global (not per-integration) setting: the enquiry notification address(es) —
+  // one address or a comma-separated list, all of which get notified.
   // Handled before the integration lookup so it isn't rejected as "unknown
   // integration". A blank value clears it (notifications fall back to demo).
+  //
+  // parseNotifyEmails owns ALL normalization (trim, lowercase, dedupe, canonical
+  // join) and is the same module the Integrations panel validates with, so the
+  // client and server can't disagree and the stored value round-trips exactly.
   if ("notifyEmail" in b) {
-    const raw = typeof b.notifyEmail === "string" ? b.notifyEmail.trim() : "";
-    if (raw === "") {
+    const raw = typeof b.notifyEmail === "string" ? b.notifyEmail : "";
+    const parsed = parseNotifyEmails(raw);
+    if (!parsed.ok) {
+      return Response.json({ ok: false, error: parsed.error }, { status: 400 });
+    }
+    if (parsed.emails.length === 0) {
       const result = await deleteSetting(SETTING_ENQUIRY_NOTIFY_EMAIL);
       if (result === "demo") {
         return Response.json({ ok: false, error: "Nothing to clear (Supabase not connected)." }, { status: 409 });
@@ -114,10 +121,7 @@ export async function POST(req: Request): Promise<Response> {
         return Response.json({ ok: false, error: "Couldn't clear the notification email." }, { status: 502 });
       }
     } else {
-      if (raw.length > 200 || !EMAIL_RE.test(raw)) {
-        return Response.json({ ok: false, error: "Enter a valid email address." }, { status: 400 });
-      }
-      const result = await writeSetting(SETTING_ENQUIRY_NOTIFY_EMAIL, raw);
+      const result = await writeSetting(SETTING_ENQUIRY_NOTIFY_EMAIL, parsed.value);
       if (result === "demo") {
         return Response.json(
           { ok: false, error: "Connect Supabase to save the notification email here." },

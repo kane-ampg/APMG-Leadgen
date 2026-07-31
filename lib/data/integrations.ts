@@ -91,7 +91,7 @@ export const INTEGRATIONS: IntegrationMeta[] = [
     envVar: "N8N_ENQUIRY_NOTIFY_WEBHOOK_URL",
     name: "Enquiry Notification",
     description:
-      "When a customer submits an enquiry on the services portal, the details are emailed to the notification address you set below. Sent via Gmail through n8n.",
+      "When a customer submits an enquiry on the services portal, the details are emailed to every notification address you set above. Sent via Gmail through n8n.",
     trigger: "webhook",
     webhookPath: "/webhook/enquiry-notify",
     workflowFile: "APMG Enquiry Notification.json",

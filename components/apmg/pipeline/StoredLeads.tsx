@@ -356,7 +356,8 @@ function AllLeadsView({
             />
           </div>
         ) : (
-          <FoldersView refreshKey={refreshKey} onOpen={onOpen} />
+          // the grid gets its own Export (every lead, one sheet per folder)
+          <FoldersView refreshKey={refreshKey} onOpen={onOpen} exportRows={rows} />
         ))}
     </div>
   );
@@ -815,9 +816,14 @@ type FoldersState =
 function FoldersView({
   refreshKey,
   onOpen,
+  exportRows,
 }: {
   refreshKey: number;
   onOpen: (batch: string) => void;
+  /** Every lead behind the grid, so the folder list can export without opening a
+   *  folder. Supplied by the Leads tab (which already holds them); omitted in the
+   *  Pipeline import flow, where the grid has no rows loaded. */
+  exportRows?: LeadView[];
 }) {
   const [state, setState] = useState<FoldersState>({ status: "loading" });
 
@@ -872,16 +878,21 @@ function FoldersView({
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={load}
-          data-track="folders_refresh"
-          aria-label="Refresh folders"
-          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-        >
-          <RefreshCw className={cn("h-3.5 w-3.5", state.status === "loading" && "animate-spin")} aria-hidden />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          {exportRows && exportRows.length > 0 && (
+            <LeadsExportMenu rows={exportRows} scope="All folders" />
+          )}
+          <button
+            type="button"
+            onClick={load}
+            data-track="folders_refresh"
+            aria-label="Refresh folders"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", state.status === "loading" && "animate-spin")} aria-hidden />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {state.status === "loading" && <TableSkeleton />}

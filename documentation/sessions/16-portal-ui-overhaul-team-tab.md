@@ -60,6 +60,13 @@ Note: the 9 headshot JPEGs in `app/team/` and `app/apmgteam.jpg` (the team lineu
 ## Outcome
 The public `/portal` shipped with a working two-tab layout (Our Services / Our Team), a self-hosted, optimised 9-person crew roster in the telemetry-console identity, per-tab hero image and copy crossfades, light-mode default scoped to the portal, and clean card edges. Each step passed a clean `next build` (exit 0, `/portal` prerenders static) and was verified with Playwright screenshots at desktop and mobile breakpoints. The one thing left hanging is the 404 the user reported at the end.
 
+> **Superseded — read this before trusting the description above** (added 2026-07-30, verified against git):
+> - The **9-person roster is now 8**. `TeamSection.tsx` at this session's commit `7f3cf50` lists nine people; at `08f162a` (2026-07-25) it lists eight — **Aiicha Robertson** was removed and "Ashley Rankin" became "Ash Rankin". No session doc records who made that edit or why; see the flag in [doc 19](19-portal-trust-cro-overhaul.md).
+> - The **telemetry-console identity built here was deliberately undone**. [Doc 19](19-portal-trust-cro-overhaul.md) (2026-07-25) rewrote `TeamSection.tsx` to strip the crew tally, the mono roster indices and the `SignalLed` "ACTIVE" lamps, on the reasoning that console instrument chrome reads as surveillance on a customer trust page. The self-hosted headshots, the roster structure and the sliding-pill tab bar this session built all survive.
+> - The **two-tab bar is now three tabs** — Our Services · Google Reviews · Our Team, per doc 19.
+> - The `standalone` consent gate mentioned in Follow-ups was completed in [doc 18](18-legal-consent-unsubscribe-enquiry-notify.md) and then **unmounted** in doc 19 (`PortalConsentGate` is kept in the repo, unreferenced). The `[COMPANY LEGAL NAME]` / `[ABN]` placeholders it flagged are still unresolved: `COMPANY.legalEntity` and `COMPANY.abn` in `lib/legal/company.ts` are both still `null`.
+> - The hero heights this doc's sibling [doc 14](14-portal-hero-polish.md) set have also been superseded — see that doc's own note.
+
 ## Follow-ups
 - **Diagnose the reported 404** ("No signal on that channel — that page isn't part of the dashboard") — likely the user's actual blocker; not investigated in-session.
 - Confirm the light-mode fix resolves on the user's real browser after a hard refresh (headless verified light; the user's machine had a stored dark pref / cached page).

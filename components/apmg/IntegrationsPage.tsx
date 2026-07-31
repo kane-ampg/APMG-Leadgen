@@ -8,13 +8,20 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  Mail,
   RefreshCw,
   Trash2,
   Webhook,
   Workflow,
+  X,
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import {
+  MAX_NOTIFY_EMAILS,
+  parseNotifyEmails,
+  serializeNotifyEmails,
+} from "@/lib/pipeline/notifyEmails";
 import {
   INTEGRATIONS,
   N8N_BASE_URL,
@@ -252,9 +259,16 @@ export function IntegrationsPage() {
 
       {load.status === "ready" && (
         <>
+          <Reveal delay={0.08} className="mt-3">
+            <NotifyEmailPanel
+              initial={load.notifyEmail}
+              canPersist={canPersist}
+              onSaved={() => fetchState({ quiet: true })}
+            />
+          </Reveal>
           <div className="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
             {integrations.map((integration, i) => (
-              <Reveal key={integration.id} delay={0.08 + 0.04 * i} className="h-full">
+              <Reveal key={integration.id} delay={0.12 + 0.04 * i} className="h-full">
                 <AutomationCard
                   integration={integration}
                   canPersist={canPersist}
@@ -263,13 +277,6 @@ export function IntegrationsPage() {
               </Reveal>
             ))}
           </div>
-          <Reveal delay={0.2} className="mt-3">
-            <NotifyEmailPanel
-              initial={load.notifyEmail}
-              canPersist={canPersist}
-              onSaved={() => fetchState({ quiet: true })}
-            />
-          </Reveal>
         </>
       )}
 
@@ -278,9 +285,13 @@ export function IntegrationsPage() {
   );
 }
 
-/** Where portal enquiries are emailed to. A single global setting (app_settings
- *  key `enquiry_notify_email`) consumed by the enquiry route + the Enquiry
- *  Notification n8n workflow. Blank clears it (no notifications sent). */
+/** Where portal enquiries are emailed to. One global setting (app_settings key
+ *  `enquiry_notify_email`) holding one address or a comma-separated list —
+ *  EVERY listed address is notified, via a single Gmail send addressed to all of
+ *  them. Consumed by the enquiry route + the Enquiry Notification n8n workflow.
+ *  Blank clears it (no notifications sent). Parsing lives in
+ *  lib/pipeline/notifyEmails.ts, shared with the API route so the validation
+ *  shown here is exactly the validation enforced on save. */
 function NotifyEmailPanel({
   initial,
   canPersist,
@@ -295,18 +306,33 @@ function NotifyEmailPanel({
   const [error, setError] = useState<string | null>(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const flashRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialRef = useRef(initial);
 
-  // Re-seed if a poll brings a newer saved value while we're not editing.
+  // Re-seed from a poll ONLY while the field still shows the last known saved
+  // value. The page polls every 15s, and clobbering a part-typed list of
+  // addresses is real data loss (one short address was survivable).
   useEffect(() => {
-    setValue(initial);
+    const prev = initialRef.current;
+    initialRef.current = initial;
+    if (prev === initial) return;
+    setValue((cur) => (cur.trim() === prev.trim() ? initial : cur));
   }, [initial]);
   useEffect(() => () => {
     if (flashRef.current) clearTimeout(flashRef.current);
   }, []);
 
-  const trimmed = value.trim();
-  const dirty = trimmed !== initial.trim();
-  const validish = trimmed === "" || /^[^\s@?&=#]+@[^\s@?&=#]+\.[^\s@?&=#]+$/.test(trimmed);
+  const parsed = useMemo(() => parseNotifyEmails(value), [value]);
+  // Compare canonical-to-canonical: saving normalises ("A@b.com ,c@d.com" →
+  // "a@b.com, c@d.com"), so a raw comparison would leave the field permanently
+  // dirty after every save.
+  const initialCanonical = useMemo(() => {
+    const p = parseNotifyEmails(initial);
+    return p.ok ? p.value : initial.trim();
+  }, [initial]);
+  const canonical = parsed.ok ? parsed.value : null;
+  const emails = parsed.ok ? parsed.emails : [];
+  const dirty = canonical !== null && canonical !== initialCanonical;
+  const validish = parsed.ok;
 
   async function save() {
     setError(null);
@@ -315,13 +341,18 @@ function NotifyEmailPanel({
       const res = await fetch("/api/integrations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ notifyEmail: trimmed }),
+        // Canonical form — Save is gated on `validish`, so this is non-null
+        // whenever save() can fire; the fallback is defensive only.
+        body: JSON.stringify({ notifyEmail: canonical ?? value }),
       });
       const data = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
       if (!res.ok || !data?.ok) {
         setError(data?.error ?? `Save failed (${res.status}).`);
         return;
       }
+      // Settle the field on what was actually stored, so the text matches the
+      // recipient chips instead of keeping the pre-normalised typing.
+      if (canonical !== null) setValue(canonical);
       setSavedFlash(true);
       if (flashRef.current) clearTimeout(flashRef.current);
       flashRef.current = setTimeout(() => setSavedFlash(false), 1800);
@@ -337,45 +368,73 @@ function NotifyEmailPanel({
     <div className="rounded-xl border border-border bg-card p-4">
       <div className="flex items-start gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent text-primary ring-1 ring-primary/15">
-          <Webhook className="h-4 w-4" aria-hidden />
+          <Mail className="h-4 w-4" aria-hidden />
         </span>
         <div className="min-w-0 flex-1">
           <h3 className="font-heading text-sm font-semibold text-foreground">
-            Enquiry notification email
+            Enquiry notification emails
           </h3>
           <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-            Every portal enquiry is emailed here (via the Enquiry Notification automation above).
-            Leave blank to send no notifications.
+            Every portal enquiry is emailed to all of these addresses (via the Enquiry Notification
+            automation below). Separate them with commas — up to {MAX_NOTIFY_EMAILS}. They arrive as
+            one email, so each recipient can see the others. Leave blank to send no notifications.
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
             <input
               type="email"
+              multiple
               inputMode="email"
               autoComplete="email"
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder="you@company.com.au"
+              placeholder="you@company.com.au, ops@company.com.au"
               disabled={busy || !canPersist}
+              data-track="notify_email_input"
               className="h-9 w-full flex-1 rounded-lg border border-input bg-background px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground/70 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
             />
             <Button
               size="sm"
               onClick={save}
               disabled={busy || !canPersist || !dirty || !validish}
+              data-track="notify_email_save"
               className="gap-1.5 bg-primary-solid text-primary-foreground hover:bg-primary-solid/90"
             >
               {savedFlash ? <Check className="h-3.5 w-3.5" aria-hidden /> : null}
               {savedFlash ? "Saved" : busy ? "Saving…" : "Save"}
             </Button>
           </div>
+          {/* Parsed recipients — shows exactly who gets notified, since a long
+              comma list scrolls out of sight inside the input. */}
+          {emails.length > 0 && (
+            <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+              {emails.map((addr) => (
+                <span
+                  key={addr}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-background px-2 py-0.5 text-[11px] text-foreground"
+                >
+                  {addr}
+                  <button
+                    type="button"
+                    onClick={() => setValue(serializeNotifyEmails(emails.filter((a) => a !== addr)))}
+                    aria-label={`Remove ${addr}`}
+                    disabled={busy || !canPersist}
+                    className="text-muted-foreground transition-colors hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <X className="h-3 w-3" aria-hidden />
+                  </button>
+                </span>
+              ))}
+              <span className="tnum ml-0.5 font-mono text-[10px] text-muted-foreground">
+                {emails.length} of {MAX_NOTIFY_EMAILS}
+              </span>
+            </div>
+          )}
           {!canPersist && (
             <p className="mt-2 text-[11px] text-amber-500">
               Connect Supabase to save this here.
             </p>
           )}
-          {!validish && (
-            <p className="mt-2 text-[11px] text-primary">Enter a valid email address.</p>
-          )}
+          {!parsed.ok && <p className="mt-2 text-[11px] text-primary">{parsed.error}</p>}
           {error && (
             <p className="mt-2 flex items-center gap-1 text-[11px] text-destructive">
               <AlertTriangle className="h-3 w-3" aria-hidden /> {error}

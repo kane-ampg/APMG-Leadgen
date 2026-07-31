@@ -50,6 +50,7 @@ import {
   trackedLink,
   type ComposeDraft,
 } from "@/lib/pipeline/campaign";
+import { SERVICE_TEMPLATES, serviceBySlug } from "@/lib/pipeline/services";
 import { Button } from "@/components/ui/button";
 import { Can } from "@/components/rbac/Can";
 import { Footer } from "../Footer";
@@ -154,6 +155,10 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   const [campaign, setCampaign] = useState(DEFAULT_CAMPAIGN);
   const [subject, setSubject] = useState(DEFAULT_SUBJECT);
   const [body, setBody] = useState(DEFAULT_BODY_HTML);
+  // service template picked on Step 2 ("" = the general multi-trade pitch).
+  // Fills the shared template, steers the AI drafts (service focus), and picks
+  // the branded email's hero photo server-side (send route → n8n).
+  const [service, setService] = useState("");
 
   // ── AI drafts (compose automation) ──
   const [draftMode, setDraftMode] = useState<DraftMode>("template");
@@ -210,6 +215,9 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
   // lead ids the current drafts were composed for — used to invalidate stale
   // drafts when the audience changes.
   const composedIdsRef = useRef<Set<string>>(new Set());
+  // the service template the current drafts were composed with — switching
+  // templates invalidates the drafts (they pitch the wrong service).
+  const composedServiceRef = useRef("");
   // a failed chunked-compose run's finished drafts, keyed by lead id — kept
   // (with its batch key) so Try again resumes from the failed chunk instead of
   // re-drafting (and re-paying for) the leads that already came back.
@@ -544,6 +552,20 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     }
   }, [picked, composePhase]);
 
+  // Invalidate ready drafts when the service template changes — they were
+  // written to pitch the old service. Unlike an audience edit this keeps the
+  // batch plan (the batches are audience slices, still valid); "Draft with AI
+  // instead" then recomposes the current batch with the new service.
+  useEffect(() => {
+    if (composePhase !== "ready" || service === composedServiceRef.current) return;
+    setComposePhase("idle");
+    setDrafts([]);
+    setApproved(new Set());
+    setDraftIdx(0);
+    setComposeInfo(null);
+    composePartialRef.current = null;
+  }, [service, composePhase]);
+
   function toggleFolder(f: string) {
     setFolderSel((prev) => {
       const next = new Set(prev);
@@ -601,12 +623,16 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       scrape: batch.filter((r) => (r.emails?.length ?? 0) === 0).length,
     });
 
-    // Resume: a prior failed run over this exact batch left its finished
-    // drafts behind — keep them and only draft the leads still missing.
-    const key = batch
-      .map((r) => r.id!)
-      .sort()
-      .join(",");
+    // Resume: a prior failed run over this exact batch (and the same service
+    // template) left its finished drafts behind — keep them and only draft the
+    // leads still missing. The service prefixes the key so drafts written for
+    // another service are never resumed into this run.
+    const key =
+      `${service}|` +
+      batch
+        .map((r) => r.id!)
+        .sort()
+        .join(",");
     const prior = composePartialRef.current?.key === key ? composePartialRef.current : null;
     const done = prior?.done ?? new Map<string, ComposeDraft>();
     let drafted = prior?.drafted ?? 0;
@@ -636,6 +662,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             campaign: tag,
+            service: service || undefined,
             leads: part.map((r) => ({
               id: r.id!,
               name: r.name,
@@ -684,6 +711,9 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     }
 
     composePartialRef.current = null;
+    // record the service these drafts were composed with (see the
+    // service-change invalidation effect)
+    composedServiceRef.current = service;
     // reassemble in batch (audience) order; leads the server dropped as
     // invalid just vanish, exactly as they did from a single response
     const results = batch
@@ -710,7 +740,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
         }),
       };
     });
-  }, [campaign]);
+  }, [campaign, service]);
 
   /** "Compose email" — draft the current selection with Claude. Selections over
    *  the AI cap are split into MAX_COMPOSE_LEADS-sized batches (audience order):
@@ -775,6 +805,16 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     void composeLeads(next);
   }, [batchQueue, targets, composeLeads]);
 
+  /** Pick a service template on Step 2: fills the shared subject/body with that
+   *  service's copy (or the general default), and is threaded through the AI
+   *  compose (service focus) and the send (matching hero photo). */
+  function selectService(slug: string) {
+    setService(slug);
+    const t = serviceBySlug(slug);
+    setSubject(t ? t.subject : DEFAULT_SUBJECT);
+    setBody(t ? t.html : DEFAULT_BODY_HTML);
+  }
+
   function editDraft(id: string, patch: Partial<Pick<ComposeDraft, "subject" | "html" | "best_email">>) {
     setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
     // If this edit makes a previously-unsendable draft sendable — e.g. the user
@@ -822,7 +862,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
       res = await fetch("/api/pipeline/campaigns/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ campaign: tag, subject, bodyHtml: body, recipients }),
+        body: JSON.stringify({ campaign: tag, subject, bodyHtml: body, recipients, service: service || undefined }),
       });
     } catch {
       if (live()) {
@@ -850,7 +890,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     if (!live()) return;
     setResult({ sent, mode: data.mode ?? "demo", campaign: data.campaign ?? tag });
     setSendPhase("done");
-  }, [recipients, campaign, subject, body, reduce]);
+  }, [recipients, campaign, subject, body, service, reduce]);
 
   function resetSend() {
     runIdRef.current++; // abort any in-flight tween/await
@@ -890,6 +930,14 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
     setBatchNo(0);
     setBatchTotal(0);
     setPicked(new Set());
+    // back to the general pitch — but only reset the shared subject/body when a
+    // service template was driving them, so a hand-written template survives
+    if (service) {
+      setSubject(DEFAULT_SUBJECT);
+      setBody(DEFAULT_BODY_HTML);
+    }
+    setService("");
+    composedServiceRef.current = "";
     setSelected(0);
   }
 
@@ -1002,6 +1050,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
             approved={approved}
             index={draftIdx}
             info={composeInfo}
+            serviceName={serviceBySlug(service)?.name ?? null}
             batchLabel={batchLabel}
             campaignTag={slugifyCampaign(campaign) || DEFAULT_CAMPAIGN}
             onIndex={setDraftIdx}
@@ -1020,6 +1069,8 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
           campaign={campaign}
           subject={subject}
           body={body}
+          service={service}
+          onService={selectService}
           recipients={recipients}
           canAi={pickedTargets.length > 0 && pickedTargets.length <= MAX_COMPOSE_LEADS}
           hasDrafts={drafts.length > 0}
@@ -1073,6 +1124,7 @@ export function SendCampaigns({ onSwitchToLeads }: { onSwitchToLeads?: () => voi
         campaign={slugifyCampaign(campaign) || DEFAULT_CAMPAIGN}
         subject={subject}
         bodyHtml={body}
+        serviceName={serviceBySlug(service)?.name ?? null}
         ai={aiSend}
         templateReady={aiSend || (subject.trim().length > 0 && body.trim().length > 0)}
         droppedCount={templateDropped}
@@ -1640,6 +1692,8 @@ function ComposePanel({
   campaign,
   subject,
   body,
+  service,
+  onService,
   recipients,
   canAi,
   hasDrafts,
@@ -1655,6 +1709,8 @@ function ComposePanel({
   campaign: string;
   subject: string;
   body: string;
+  service: string;
+  onService: (slug: string) => void;
   recipients: Array<{ id: string; email: string; business: string }>;
   canAi: boolean;
   hasDrafts: boolean;
@@ -1683,7 +1739,11 @@ function ComposePanel({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <PhaseHeader icon={PenLine} title="Compose the email" meta={`Shared template · ${tag}`} />
+        <PhaseHeader
+          icon={PenLine}
+          title="Compose the email"
+          meta={`${serviceBySlug(service)?.name ?? "Shared template"} · ${tag}`}
+        />
         {canAi && (
           <button
             type="button"
@@ -1716,6 +1776,58 @@ function ComposePanel({
           sector-specific email from the composer prompt.
         </p>
       )}
+
+      {/* service templates — one per APMG service line. Picking one fills the
+          shared subject/body, steers the AI drafts (Claude leads with that
+          service, still tailored per lead's sector), and swaps the branded
+          email's hero photo to match. */}
+      <div className="flex flex-col gap-1.5">
+        <span className="flex items-baseline justify-between gap-2">
+          <span className="text-[12px] font-medium text-foreground">Service template</span>
+          <span className="font-mono text-[9.5px] text-muted-foreground">
+            fills the template · steers AI drafts · sets the email&apos;s hero photo
+          </span>
+        </span>
+        <div className="flex flex-wrap gap-1.5" role="group" aria-label="Service template">
+          <button
+            type="button"
+            onClick={() => onService("")}
+            aria-pressed={service === ""}
+            data-track="campaign_service_general"
+            className={cn(
+              "rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+              service === ""
+                ? "border-primary/50 bg-primary/10 text-primary"
+                : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+            )}
+          >
+            All trades (general)
+          </button>
+          {SERVICE_TEMPLATES.map((t) => (
+            <button
+              key={t.slug}
+              type="button"
+              onClick={() => onService(t.slug)}
+              aria-pressed={service === t.slug}
+              title={t.name}
+              data-track={`campaign_service_${t.slug}`}
+              className={cn(
+                "rounded-md border px-2.5 py-1.5 text-[11px] font-medium transition-colors",
+                service === t.slug
+                  ? "border-primary/50 bg-primary/10 text-primary"
+                  : "border-border bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground",
+              )}
+            >
+              {t.short}
+            </button>
+          ))}
+        </div>
+        {hasDrafts && (
+          <p className="font-mono text-[10px] leading-relaxed text-muted-foreground">
+            Switching the service template clears the current AI drafts — they were written for the old service.
+          </p>
+        )}
+      </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* editor */}
@@ -1937,6 +2049,7 @@ function DraftsReviewPanel({
   approved,
   index,
   info,
+  serviceName,
   batchLabel,
   campaignTag,
   onIndex,
@@ -1952,6 +2065,7 @@ function DraftsReviewPanel({
   approved: Set<string>;
   index: number;
   info: { mode: "live" | "demo"; saved: number; drafted: number } | null;
+  serviceName: string | null;
   batchLabel: string | null;
   campaignTag: string;
   onIndex: (i: number) => void;
@@ -1980,7 +2094,7 @@ function DraftsReviewPanel({
         <PhaseHeader
           icon={Sparkles}
           title="Review AI drafts"
-          meta={`${batchLabel ? `${batchLabel} · ` : ""}${approvedCount.toLocaleString("en-US")} of ${drafts.length.toLocaleString("en-US")} selected to send${info?.mode === "demo" ? " · demo drafts" : info && info.drafted < drafts.length ? ` · ${info.drafted.toLocaleString("en-US")} AI-written` : ""}`}
+          meta={`${batchLabel ? `${batchLabel} · ` : ""}${serviceName ? `${serviceName} · ` : ""}${approvedCount.toLocaleString("en-US")} of ${drafts.length.toLocaleString("en-US")} selected to send${info?.mode === "demo" ? " · demo drafts" : info && info.drafted < drafts.length ? ` · ${info.drafted.toLocaleString("en-US")} AI-written` : ""}`}
         />
         <div className="flex items-center gap-2">
           <button
@@ -2190,6 +2304,7 @@ function ReviewPanel({
   campaign,
   subject,
   bodyHtml,
+  serviceName,
   ai,
   templateReady,
   droppedCount,
@@ -2202,6 +2317,7 @@ function ReviewPanel({
   campaign: string;
   subject: string;
   bodyHtml: string;
+  serviceName: string | null;
   ai: boolean;
   templateReady: boolean;
   droppedCount: number;
@@ -2231,6 +2347,13 @@ function ReviewPanel({
         <Stat label="Campaign tag" value={campaign} mono />
         <Stat label="Message" value={ai ? "AI · per lead" : "Shared template"} />
       </dl>
+
+      {serviceName && (
+        <p className="font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+          Service template: <span className="text-foreground/80">{serviceName}</span> — the branded email&apos;s hero
+          photo is swapped to match this service.
+        </p>
+      )}
 
       {!ai && (
         <div className="rounded-lg border border-border bg-background/40 px-3 py-2.5">

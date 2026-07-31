@@ -1,13 +1,18 @@
 // One item per message → branded APMG HTML email (PDF shown as a downloadable file card, linked not attached).
-// Body in:  { campaign, messages: [{ to, leadId, subject, text, attachment?: { url, filename } }] }
+// Body in:  { campaign, messages: [{ to, leadId, subject, text, attachment?: { url, filename }, hero?, hero_alt? }] }
 // Body out: { campaign, to, leadId, subject, html, text, attachment_url, attachment_name }
+// `hero`/`hero_alt` (optional, per message) swap the hero band to that service's
+// photo — the app sends them when a service template is picked on Step 2
+// Compose (lib/pipeline/services.ts), so the image matches the pitched service.
 
 const BRAND = {
   color: "#c8102e",
   logo: "https://www.apmgservices.com.au/images/apmg-logo.png",
-  // Hero band under the header — the team + fleet photo (hosted in Supabase
-  // Storage, public bucket). Set to "" to hide the hero image entirely.
+  // Hero band under the header — the DEFAULT team + fleet photo (hosted in
+  // Supabase Storage, public bucket), used when a message carries no `hero` of
+  // its own. Set to "" to hide the default hero entirely.
   hero: "https://iskvglrdgqubwcmyjsbq.supabase.co/storage/v1/object/public/sector-assets/apmgteam.jpg",
+  heroAlt: "The APMG Services team in front of our head office and fleet",
   website: "https://www.apmgservices.com.au/",
   facebook: "https://www.facebook.com/p/APMG-Services-100072630217180/",
   instagram: "https://www.instagram.com/apmg.services",
@@ -76,7 +81,7 @@ function pdfCard(href, attName) {
   '</td></tr>';
 }
 
-function buildHtml(text, pdfHref, attName, unsubHref) {
+function buildHtml(text, pdfHref, attName, unsubHref, hero, heroAlt) {
   const linkStyle = 'color:' + BRAND.color + ';text-decoration:none;font-weight:600;';
   const dot = '<span style="color:#d1d5db;">&nbsp;&middot;&nbsp;</span>';
   const wordmark =
@@ -98,9 +103,9 @@ function buildHtml(text, pdfHref, attName, unsubHref) {
 '    <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:12px;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">\n' +
 '      <tr><td style="background:#111111;padding:18px 28px;">' + header + '</td></tr>\n' +
 '      <tr><td style="height:3px;background:' + BRAND.color + ';font-size:0;line-height:0;">&nbsp;</td></tr>\n' +
-    (BRAND.hero
+    (hero
       ? '      <tr><td style="font-size:0;line-height:0;background:#e5e7eb;">' +
-          '<img src="' + esc(BRAND.hero) + '" alt="The APMG Services team in front of our head office and fleet" width="600" ' +
+          '<img src="' + esc(hero) + '" alt="' + esc(heroAlt || BRAND.heroAlt) + '" width="600" ' +
           'style="display:block;border:0;outline:none;width:100%;max-width:600px;height:auto;"></td></tr>\n'
       : '') +
 '      <tr><td style="padding:28px 28px 8px;">\n' +
@@ -144,6 +149,9 @@ for (const m of messages) {
   const att = m.attachment && typeof m.attachment === "object" ? m.attachment : null;
   const attUrl = att && att.url ? att.url.toString() : "";
   const attName = att && att.filename ? att.filename.toString() : "";
+  // Per-message hero (service template photo) — falls back to the team photo.
+  const hero = (m.hero || BRAND.hero || "").toString();
+  const heroAlt = (m.hero_alt || BRAND.heroAlt || "").toString();
 
   // Prefer the host scraped from the CTA link (correct across dev/preview/prod);
   // fall back to the configured portal base so unsubscribe/PDF links still work
@@ -169,7 +177,7 @@ for (const m of messages) {
     json: {
       campaign, to, leadId,
       subject: (m.subject || "").toString(),
-      html: buildHtml(text, pdfHref, attName, unsubHref),
+      html: buildHtml(text, pdfHref, attName, unsubHref, hero, heroAlt),
       text, attachment_url: attUrl, attachment_name: attName,
     },
   });

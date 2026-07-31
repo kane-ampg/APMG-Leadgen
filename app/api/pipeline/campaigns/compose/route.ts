@@ -10,6 +10,7 @@ import {
   type ComposeLeadInput,
 } from "@/lib/pipeline/campaign";
 import { isUuid, sameOrigin } from "@/lib/pipeline/server";
+import { serviceBySlug, type ServiceTemplate } from "@/lib/pipeline/services";
 import { buildComposeKb, loadPlaybooks } from "@/lib/pipeline/sectorStore";
 import { draftEmail } from "@/lib/ai/composeEmail";
 import { COMPOSE_ANGLES } from "@/lib/ai/composePrompt";
@@ -89,19 +90,34 @@ async function draftForLead(
   kb: string,
   promptCfg: ComposePromptConfig,
   angle: string,
+  service: ServiceTemplate | null,
 ): Promise<{ draft: ComposeDraft; ai: boolean }> {
-  const base = demoDraft(lead);
+  const base = demoDraft(lead, service);
   const drafted = await draftEmail(
     { business: lead.name, category: lead.category, website: lead.website },
     kb,
     promptCfg,
     angle,
+    service ? serviceFocusPrompt(service) : undefined,
   );
   if (!drafted) return { draft: base, ai: false };
   const subject = drafted.subject.slice(0, MAX_SUBJECT);
   const html = drafted.html.slice(0, MAX_HTML);
   if (!subject || !html) return { draft: base, ai: false };
   return { draft: { ...base, subject, html: ensureLinkToken(html) }, ai: true };
+}
+
+/** The campaign's service focus, appended to each lead's user message when a
+ *  service template was picked on Step 2. Leads the email with that service
+ *  while STILL tailoring to the recipient's sector — e.g. Flooring Services to
+ *  a childcare centre becomes safe, soft, non-slip floors for the kids. */
+function serviceFocusPrompt(svc: ServiceTemplate): string {
+  return (
+    `Service focus for this campaign: ${svc.name}. What it covers: ${svc.focus}\n` +
+    `Lead the email with this service and make it the star of the pitch, but TAILOR it to the recipient's sector and the people who use their site every day ` +
+    `(for example: flooring for an early learning centre is about safe, non-slip floors where children play; electrical for aged care is about safe, compliant power and lighting for residents). ` +
+    `Mention APMG's other trades only briefly, as backup. The subject and the CTA anchor label must both fit this service and the recipient's sector.`
+  );
 }
 
 export async function POST(req: Request): Promise<Response> {
@@ -122,6 +138,10 @@ export async function POST(req: Request): Promise<Response> {
     return json({ ok: false, mode: "noop", error: "Invalid campaign tag — use letters, numbers, and dashes." }, 400);
   }
 
+  // Optional service template (Step 2 picker). Unknown/absent slug → null →
+  // the classic general multi-trade compose, unchanged.
+  const service = serviceBySlug(typeof b.service === "string" ? b.service : null);
+
   const rawLeads = b.leads;
   if (!Array.isArray(rawLeads)) {
     return json({ ok: false, mode: "noop", error: "Expected { leads: [...] }." }, 400);
@@ -141,7 +161,7 @@ export async function POST(req: Request): Promise<Response> {
   // No API key → deterministic template for every lead (demo mode). Still fully
   // reviewable and sendable; just not AI-written.
   if (!process.env.ANTHROPIC_API_KEY) {
-    return json({ ok: true, mode: "demo", campaign, results: leads.map(demoDraft), saved: 0 });
+    return json({ ok: true, mode: "demo", campaign, results: leads.map((l) => demoDraft(l, service)), saved: 0 });
   }
 
   // Ground each draft in the sector KB for its Category (general company file +
@@ -211,7 +231,7 @@ export async function POST(req: Request): Promise<Response> {
       // Checked before the gate so a backed-up gate queue drains to templates
       // rather than pushing the function past the deadline.
       if (SOFT_DEADLINE_MS - (Date.now() - startedAt) <= 0) {
-        results[i] = demoDraft(lead);
+        results[i] = demoDraft(lead, service);
         continue;
       }
       // Pace this call under the RPM ceiling before spending any budget on it.
@@ -219,7 +239,7 @@ export async function POST(req: Request): Promise<Response> {
       // Re-check the deadline: the gate may have made us wait.
       const remaining = SOFT_DEADLINE_MS - (Date.now() - startedAt);
       if (remaining <= 0) {
-        results[i] = demoDraft(lead);
+        results[i] = demoDraft(lead, service);
         continue;
       }
       // Rotate the writing angle per lead so same-sector emails in one batch
@@ -228,9 +248,9 @@ export async function POST(req: Request): Promise<Response> {
       // Cap the draft at the remaining budget too: one call grinding through
       // 429 backoffs must not carry the function past the deadline.
       const { draft, ai } = await withDeadline(
-        draftForLead(lead, await kbFor(lead.category), promptCfg, angle),
+        draftForLead(lead, await kbFor(lead.category), promptCfg, angle, service),
         remaining,
-        { draft: demoDraft(lead), ai: false },
+        { draft: demoDraft(lead, service), ai: false },
       );
       results[i] = draft;
       if (ai) drafted += 1;

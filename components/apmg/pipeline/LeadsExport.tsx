@@ -3,7 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import { FileDown, FileSpreadsheet, FileText, Printer } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { exportLeadsCsv, exportLeadsPdf, exportLeadsXlsx } from "@/lib/pipeline/leadExport";
+import {
+  exportLeadsCsv,
+  exportLeadsPdf,
+  exportLeadsXlsx,
+  leadFolderCount,
+} from "@/lib/pipeline/leadExport";
 import type { LeadView } from "./LeadsTable";
 
 /**
@@ -46,10 +51,17 @@ export function LeadsExportMenu({
   }, [open]);
 
   const count = rows.length;
+  // >1 folder in scope → the workbook splits into one sheet per folder
+  const folders = leadFolderCount(rows);
+  const multiFolder = folders > 1;
   const scopeHint =
     selectionCount > 0
-      ? `${count.toLocaleString("en-US")} selected lead${count === 1 ? "" : "s"}`
-      : `${count.toLocaleString("en-US")} lead${count === 1 ? "" : "s"} · ${scope}`;
+      ? `${count.toLocaleString("en-US")} selected lead${count === 1 ? "" : "s"}${
+          multiFolder ? ` · ${folders} folders` : ""
+        }`
+      : `${count.toLocaleString("en-US")} lead${count === 1 ? "" : "s"} · ${
+          multiFolder ? `${folders} folders` : scope
+        }`;
 
   function run(kind: "csv" | "xlsx" | "pdf") {
     setError(null);
@@ -63,9 +75,24 @@ export function LeadsExportMenu({
   }
 
   const items: { kind: "csv" | "xlsx" | "pdf"; label: string; hint: string; icon: typeof FileText }[] = [
-    { kind: "csv", label: "CSV", hint: "Every field — spreadsheets, imports", icon: FileText },
-    { kind: "xlsx", label: "Excel (XLSX)", hint: "Every field — formatted workbook", icon: FileSpreadsheet },
-    { kind: "pdf", label: "PDF", hint: "Print-ready summary table", icon: Printer },
+    {
+      kind: "csv",
+      label: "CSV",
+      hint: multiFolder ? "Every field — grouped by folder" : "Every field — spreadsheets, imports",
+      icon: FileText,
+    },
+    {
+      kind: "xlsx",
+      label: "Excel (XLSX)",
+      hint: multiFolder ? "One sheet per folder — every field" : "Every field — formatted workbook",
+      icon: FileSpreadsheet,
+    },
+    {
+      kind: "pdf",
+      label: "PDF",
+      hint: multiFolder ? "Print-ready — split by folder" : "Print-ready summary table",
+      icon: Printer,
+    },
   ];
 
   return (

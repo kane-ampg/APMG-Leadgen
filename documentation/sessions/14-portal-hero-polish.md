@@ -37,6 +37,8 @@ Both edits shipped to `ServicesPortal.tsx` in this session. Verification was by 
 
 Note for future readers: the live file has since evolved well beyond this session's state. As of the current repo, the hero is `h-[300px]`/`sm:h-[360px]` with a two-image cross-fade (`heroBg` + `heroTeam`) and `object-contain object-center` — so this session's specific `h-[248px]`/`sm:h-[310px]` heights and the `object-top` framing have been superseded by later work. This doc records only what this session did.
 
+Specifically, the superseding work is [doc 16](16-portal-ui-overhaul-team-tab.md) (2026-07-12 — the per-tab hero image/copy crossfade and the sliding-pill tab bar, which is where the two-image hero comes from) and [doc 19](19-portal-trust-cro-overhaul.md) (2026-07-25 — a hero CTA row with quote + WhatsApp buttons, a `PROOF_POINTS` band, and `object-contain` flipped to `object-cover` in three places, reversing part of this session's framing rationale). The **Where to find us** contact card this session promoted survives; doc 19 rewrote its contents to add the phone number. `GENERAL_SERVICE`, kept here because the hero CTA used it, is still in use.
+
 ## Follow-ups
 - Offered (not actioned): if removing the "Talk to our team" CTA left the closing feeling bare, a lighter, non-templated closing gesture (e.g. a single quiet line of copy) could replace it.
 - Offered (not actioned): if the 3% hero trim was too subtle, dial in a target height or larger percentage.

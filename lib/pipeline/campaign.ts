@@ -7,6 +7,8 @@
 // references/Leadgen Automation.json: a short HTML email whose CTA links to the
 // attribution hook /t/<leadId>?c=<campaign> (see app/t/[id]/route.ts).
 
+import type { ServiceTemplate } from "./services";
+
 /** Default tracking tag (the `?c=` value). Mirrors the n8n outreach campaign. */
 export const DEFAULT_CAMPAIGN = "outreach-2026";
 
@@ -365,12 +367,28 @@ export function ctaLabel(category: string | null): string {
 /** Deterministic per-lead draft used as the fallback (no ANTHROPIC_API_KEY, or
  *  a Claude miss) and as the base the composer overrides — mirrors the composer's
  *  shape and rules (tailored opening paragraph, {{link}} CTA, APMG sign-off) so
- *  the review UI is always exercisable. */
-export function demoDraft(lead: ComposeLeadInput): ComposeDraft {
+ *  the review UI is always exercisable. When a service template is selected
+ *  (Step 2 Compose), the fallback is that service's shared template instead of
+ *  the generic multi-trade copy, so a Claude miss still pitches the right
+ *  service. */
+export function demoDraft(lead: ComposeLeadInput, service?: ServiceTemplate | null): ComposeDraft {
   const emails = (lead.emails ?? []).map((e) => e.trim().toLowerCase()).filter(isEmail).slice(0, MAX_DRAFT_EMAILS);
   const category = (lead.category ?? "").trim() || null;
   const trade = sectorPhrase(category);
   const business = escapeHtml(lead.name.trim() || "there");
+  if (service) {
+    return {
+      id: lead.id,
+      business: lead.name,
+      category,
+      url: lead.website ?? null,
+      emails,
+      email_source: emails.length ? "csv" : "none",
+      best_email: bestEmail(emails),
+      subject: service.subject.slice(0, 120),
+      html: service.html.split("{{business}}").join(business),
+    };
+  }
   const html =
     `<p>Hi ${business},</p>` +
     `<p>APMG Services is a Melbourne-based multi-trade property maintenance partner covering painting, electrical, plumbing, carpentry, flooring, grounds and property make-safe, all handled by one licensed team. ` +

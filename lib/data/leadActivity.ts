@@ -54,6 +54,8 @@ export interface LeadActivity {
     serviceOpens: number;
     /** canonical `portal_inquiry` count (the client dup is excluded) */
     inquiries: number;
+    /** questions asked of the portal assistant (`chat_prompt` ledger rows) */
+    chatPrompts: number;
   };
 }
 
@@ -131,6 +133,7 @@ export type LeadEventKind =
   | "download"
   | "view"
   | "service"
+  | "chat"
   | "enquiry"
   | "website"
   | "consent"
@@ -150,6 +153,11 @@ export function eventKind(ev: Pick<LeadActivityEvent, "event" | "destination">):
       return "view";
     case "portal_service_open":
       return "service";
+    // The portal assistant's durable quota ledger (lib/portal/chatQuota) — one
+    // row per question a lead asked. Content-free by design (chars only), so
+    // it tells the desk THAT they were researching, never what they typed.
+    case "chat_prompt":
+      return "chat";
     case "portal_inquiry":
       return "enquiry";
     case "portal_website_click":
@@ -181,6 +189,8 @@ export function eventLabel(
       return ev.service === "general"
         ? "Opened the general enquiry form"
         : `Viewed ${serviceName(ev.service)}`;
+    case "chat":
+      return "Asked the portal assistant a question";
     case "enquiry":
       return ev.service ? `Sent an enquiry — ${serviceName(ev.service)}` : "Sent an enquiry";
     case "website":
@@ -235,10 +245,12 @@ export const DEMO_LEAD_ACTIVITY: LeadActivity[] = [
       { event: "portal_service_open", service: "painting", destination: null, ts: hoursAgo(1.35) },
       { event: "portal_service_open", service: "handyman", destination: null, ts: hoursAgo(1.25) },
       { event: "attribution_click", service: null, destination: DEMO_PACK_URL, ts: hoursAgo(1.15) },
+      { event: "chat_prompt", service: null, destination: null, ts: hoursAgo(1.1) },
+      { event: "chat_prompt", service: null, destination: null, ts: hoursAgo(1.07) },
       { event: "portal_consent_accept", service: "painting", destination: null, version: "1.0", ts: hoursAgo(1.01) },
       { event: "portal_inquiry", service: "painting", destination: null, ts: hoursAgo(1) },
     ],
-    counts: { emailClicks: 2, portalViews: 1, serviceOpens: 2, inquiries: 1 },
+    counts: { emailClicks: 2, portalViews: 1, serviceOpens: 2, inquiries: 1, chatPrompts: 2 },
   },
   {
     leadId: "demo-lead-02",
@@ -257,7 +269,7 @@ export const DEMO_LEAD_ACTIVITY: LeadActivity[] = [
       { event: "portal_service_open", service: "make-safe", destination: null, ts: hoursAgo(5.1) },
       { event: "portal_inquiry", service: "make-safe", destination: null, ts: hoursAgo(5) },
     ],
-    counts: { emailClicks: 1, portalViews: 2, serviceOpens: 3, inquiries: 1 },
+    counts: { emailClicks: 1, portalViews: 2, serviceOpens: 3, inquiries: 1, chatPrompts: 0 },
   },
   {
     leadId: "demo-lead-03",
@@ -270,9 +282,10 @@ export const DEMO_LEAD_ACTIVITY: LeadActivity[] = [
       { event: "attribution_click", service: null, destination: DEMO_PACK_URL, ts: hoursAgo(27) },
       { event: "attribution_click", service: null, destination: DEMO_PORTAL_URL, ts: hoursAgo(26.6) },
       { event: "portal_view", service: null, destination: null, ts: hoursAgo(26.5) },
+      { event: "chat_prompt", service: null, destination: null, ts: hoursAgo(26.4) },
       { event: "portal_service_open", service: "electrical", destination: null, ts: hoursAgo(26.3) },
     ],
-    counts: { emailClicks: 2, portalViews: 1, serviceOpens: 1, inquiries: 0 },
+    counts: { emailClicks: 2, portalViews: 1, serviceOpens: 1, inquiries: 0, chatPrompts: 1 },
   },
   {
     leadId: "demo-lead-04",
@@ -287,7 +300,7 @@ export const DEMO_LEAD_ACTIVITY: LeadActivity[] = [
       { event: "portal_service_open", service: "flooring", destination: null, ts: hoursAgo(48.7) },
       { event: "portal_service_open", service: "general", destination: null, ts: hoursAgo(48.4) },
     ],
-    counts: { emailClicks: 1, portalViews: 1, serviceOpens: 2, inquiries: 0 },
+    counts: { emailClicks: 1, portalViews: 1, serviceOpens: 2, inquiries: 0, chatPrompts: 0 },
   },
   {
     leadId: "demo-lead-05",
@@ -300,7 +313,7 @@ export const DEMO_LEAD_ACTIVITY: LeadActivity[] = [
       { event: "attribution_click", service: null, destination: DEMO_PORTAL_URL, ts: hoursAgo(97) },
       { event: "portal_view", service: null, destination: null, ts: hoursAgo(96.9) },
     ],
-    counts: { emailClicks: 1, portalViews: 1, serviceOpens: 0, inquiries: 0 },
+    counts: { emailClicks: 1, portalViews: 1, serviceOpens: 0, inquiries: 0, chatPrompts: 0 },
   },
 ];
 

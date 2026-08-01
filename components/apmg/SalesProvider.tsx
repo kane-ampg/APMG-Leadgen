@@ -10,13 +10,39 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import {
+  EMPTY_SERIES,
+  countLast24h,
+  parseStamps,
+  volumeSeries,
+  type VolumeSeries,
+} from "@/lib/data/buckets";
 import { SALES_LEADS, type SalesLead, type SalesStatus } from "@/lib/data/sales";
-import type { SalesQueueResponse, SalesQueueRow } from "@/lib/sales/queue";
+import { adminHeaders } from "@/lib/portal/adminKey";
+import type { SalesHandoffResponse } from "@/lib/sales/handoff";
+import type { SalesHandoffStamp, SalesQueueResponse, SalesQueueRow } from "@/lib/sales/queue";
+import { isSelfHandoff } from "@/lib/sales/selfHandoff";
 
 export interface CloseDealInput {
   note: string;
   value: number;
 }
+
+/** How often the desk re-checks for leads admin has sent over. Paused while
+ *  the tab is hidden, and topped up the moment it regains focus — the same
+ *  realtime-by-short-poll grammar the rest of the app uses. */
+const POLL_MS = 20000;
+
+/**
+ * How long a freshly-arrived lead stays visually marked in the queue.
+ *
+ * This is deliberately NOT tied to the notification. Acknowledging (opening the
+ * modal's "Open Sales", or dismissing the banner) stops the *announcement* —
+ * but the rep still has to FIND those leads in the list, so the rows keep their
+ * highlight until they've had a fair chance to work them. It clears on its own
+ * afterwards, so the queue never stays permanently painted.
+ */
+const HIGHLIGHT_MS = 10 * 60 * 1000;
 
 /** Funnel tallies shared by the Sales tab and the Overview KPI cards. */
 export interface SalesStats {
@@ -35,6 +61,23 @@ interface SalesContextValue {
   stats: SalesStats;
   /** unique emailed leads across all pages */
   total: number;
+  /**
+   * The newest hand-offs regardless of which page the rep is paged to — the
+   * Sales overview's "latest" panel. (`leads` follows the page; this must not.)
+   */
+  recent: SalesLead[];
+  /** hand-off volume over time, for the Sales overview's histogram */
+  series: VolumeSeries;
+  /** leads admin handed over in the last 24h */
+  handedToday: number;
+  /**
+   * Every lead id admin has handed to Sales (all pages). Surfaces outside the
+   * queue use it to keep to the desk's own leads — the Enquiries tab scopes its
+   * list with it, so a rep never sees enquiries from the raw outreach list.
+   */
+  queuedIds: ReadonlySet<string>;
+  /** newest hand-off stamp anywhere in the queue, ISO ("" when empty) */
+  latestHandoffAt: string;
   /** 1-based current page */
   page: number;
   pageCount: number;
@@ -44,11 +87,40 @@ interface SalesContextValue {
   error: string | null;
   /** portal_events doesn't exist yet — run supabase/portal-telemetry.sql */
   needsMigration: boolean;
+  /** New leads admin has sent over since the rep last looked. Drives the
+   *  arrivals banner and the live indicator's pulse. 0 = nothing new. */
+  arrivals: number;
+  /** Ids on the CURRENT page that are part of that unseen batch, so the rows
+   *  themselves can announce their arrival. */
+  freshIds: ReadonlySet<string>;
+  /** Rep has seen the new leads — clears the banner, pulse and row highlights. */
+  acknowledgeArrivals: () => void;
   setPage: (page: number) => void;
   reload: () => void;
+  /** What a lead is showing right now, by lead id — its status override if the
+   *  rep has marked it, else the loaded row's, else "new".
+   *
+   *  Correct across pages in live mode: /api/sales/queue hands every row back
+   *  as "new", so any other status can only have come from an override, and
+   *  overrides are held for the whole session regardless of which page the
+   *  lead was on. That makes this safe for surfaces OUTSIDE the queue (the Hot
+   *  Leads tab reads it to show what happened to a lead it handed over). */
+  statusOf: (id: string) => SalesStatus;
   markContacted: (id: string) => void;
   markLost: (id: string) => void;
   closeDeal: (id: string, input: CloseDealInput) => void;
+  /**
+   * Hand leads BACK to admin, with an optional reason ("we already work with
+   * them"). This clears the hand-off server-side, so they leave this queue and
+   * reappear on the admin Hot Leads tab carrying the note.
+   *
+   * Takes a list because returning a whole batch under one reason is the common
+   * case — a rep recognising a group they already service. One request, one
+   * note on each.
+   *
+   * Resolves to null on success, else a message to show the rep.
+   */
+  returnLeads: (ids: string[], note: string) => Promise<string | null>;
   /** retract the last status change on a lead — undoes mark-contacted, a close,
    *  or a lost mark, stepping back one mark at a time */
   revertStatus: (id: string) => void;
@@ -73,11 +145,35 @@ function fmtStamp(iso: string | null | undefined): string | undefined {
   return `${day}, ${time}`;
 }
 
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+
+/** True when the set already holds exactly these ids — lets the poll skip a
+ *  state write (and the re-render) when nothing has actually changed. */
+function sameIds(set: ReadonlySet<string>, ids: string[]): boolean {
+  return set.size === ids.length && ids.every((id) => set.has(id));
+}
+
+/** Hand-offs newer than the watermark, excluding this browser's own — the
+ *  arrival count. Shared by the poll and the fresh-row highlight so the number
+ *  and the highlighted rows can never disagree. */
+function arrivalIds(handoffs: SalesHandoffStamp[], seen: string): string[] {
+  return handoffs
+    .filter((h) => h.at > seen && !isSelfHandoff(h.leadId))
+    .map((h) => h.leadId);
+}
+
+function countArrivals(handoffs: SalesHandoffStamp[], seen: string): number {
+  return arrivalIds(handoffs, seen).length;
+}
+
 /** Map one /api/sales/queue row into the card shape. Everything the scraper
  *  didn't capture (score, AI brief, deal estimate) stays undefined and the
- *  card simply omits it. */
+ *  card simply omits it.
+ *
+ *  `receivedAt` is when ADMIN handed the lead over — that's what put it in the
+ *  queue — while `emailSentAt` stays the outreach history. They're usually
+ *  different moments now, so they're read from different stamps. */
 function toSalesLead(r: SalesQueueRow): SalesLead {
-  const sentAt = fmtStamp(r.lastSentAt) ?? "recently";
   return {
     id: r.id,
     business: r.business,
@@ -87,22 +183,28 @@ function toSalesLead(r: SalesQueueRow): SalesLead {
     phone: r.phone ?? undefined,
     email: r.email ?? undefined,
     rating: r.rating ?? undefined,
-    emailSent: true,
-    emailSentAt: sentAt,
+    emailSent: r.emailsSent > 0,
+    emailSentAt: fmtStamp(r.lastSentAt) ?? "—",
     emailsSent: r.emailsSent,
     engaged: r.engaged,
     engagedAt: fmtStamp(r.engagedAt),
     status: "new",
-    receivedAt: sentAt,
+    receivedAt: fmtStamp(r.handedOffAt) ?? "recently",
   };
 }
 
 /**
  * Sales state shared by the Sales queue, Closed-deals tab, Overview KPIs and
- * the sidebar badge. The queue itself is REAL data: every lead the admin has
- * emailed (the portal_events email_sent ledger), fetched one server-paginated
- * page at a time from /api/sales/queue. Demo mode (no Supabase configured)
- * falls back to the preset so the tab stays exercisable.
+ * the sidebar badge. The queue itself is REAL data: every lead ADMIN has handed
+ * over from Hot Leads (the portal_events sales_handoff ledger — being emailed
+ * is not enough), fetched one server-paginated page at a time from
+ * /api/sales/queue. Demo mode (no Supabase configured) falls back to the preset
+ * so the tab stays exercisable.
+ *
+ * The queue is live: a short poll (paused when hidden, topped up on focus)
+ * re-reads it, and a hand-off stamp newer than the one the rep acknowledged
+ * raises `arrivals` — that's what makes the desk announce incoming work
+ * instead of waiting for a manual refresh.
  *
  * Status changes (contacted / lost / closed) are kept in-memory per lead id —
  * they survive paging back and forth, but not a reload; persisting them is a
@@ -113,6 +215,11 @@ function toSalesLead(r: SalesQueueRow): SalesLead {
  */
 export function SalesProvider({ children }: { children: ReactNode }) {
   const [rows, setRows] = useState<SalesLead[]>([]);
+  // Page-independent head of the queue + the full hand-off roll. Both exist so
+  // the rep's surfaces can describe the desk's own work (latest arrivals, volume
+  // over time, which enquiries are theirs) without touching admin-wide data.
+  const [recentRows, setRecentRows] = useState<SalesLead[]>([]);
+  const [handoffs, setHandoffs] = useState<SalesHandoffStamp[]>([]);
   const [mode, setMode] = useState<"live" | "demo">("live");
   const [page, setPageState] = useState(1);
   const [total, setTotal] = useState(0);
@@ -128,6 +235,25 @@ export function SalesProvider({ children }: { children: ReactNode }) {
   const [reloadTick, setReloadTick] = useState(0);
   const requestSeq = useRef(0);
   const demoSeeded = useRef(false);
+  /** Last page of RAW queue rows — `leads` is the display shape, which loses
+   *  the ISO hand-off stamp that arrival detection compares against. */
+  const rawRows = useRef<SalesQueueRow[]>([]);
+  // Arrival detection. `seenAt` is the newest hand-off the rep has acknowledged;
+  // anything stamped after it is new. It is seeded from the FIRST successful
+  // response so a queue that was already full doesn't announce itself as new —
+  // only what lands from then on counts.
+  const [seenAt, setSeenAt] = useState<string | null>(null);
+  const [latestAt, setLatestAt] = useState("");
+  const [arrivals, setArrivals] = useState(0);
+  /** The most recent batch of arrivals, still marked in the list. Survives
+   *  acknowledgement (see HIGHLIGHT_MS) — that's what makes the rows visible
+   *  when the rep opens Sales FROM the modal. */
+  const [freshIds, setFreshIds] = useState<ReadonlySet<string>>(EMPTY_IDS);
+  /** When that batch landed, for the expiry. A ref so the poll closure always
+   *  reads the current value rather than the one from its render. */
+  const freshAtRef = useRef(0);
+  const seenRef = useRef<string | null>(null);
+  const totalRef = useRef(0);
 
   useEffect(() => {
     const seq = ++requestSeq.current;
@@ -135,7 +261,17 @@ export function SalesProvider({ children }: { children: ReactNode }) {
     setLoading(true);
     setError(null);
 
-    (async () => {
+    void load(seq, () => cancelled);
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, reloadTick]);
+
+  /** One queue read. `silent` marks the background poll: it must never flip a
+   *  populated desk into a spinner or an error screen over a transient blip. */
+  async function load(seq: number, cancelled: () => boolean, silent = false) {
+    {
       let data: SalesQueueResponse;
       try {
         const res = await fetch(`/api/sales/queue?page=${page}&pageSize=${PAGE_SIZE}`, {
@@ -146,17 +282,23 @@ export function SalesProvider({ children }: { children: ReactNode }) {
           throw new Error(data?.error || "Couldn't load the sales queue.");
         }
       } catch (e) {
-        if (cancelled || seq !== requestSeq.current) return;
-        setError(e instanceof Error ? e.message : "Couldn't load the sales queue.");
-        setLoading(false);
+        if (cancelled() || seq !== requestSeq.current) return;
+        if (!silent) {
+          setError(e instanceof Error ? e.message : "Couldn't load the sales queue.");
+          setLoading(false);
+        }
         return;
       }
-      if (cancelled || seq !== requestSeq.current) return;
+      if (cancelled() || seq !== requestSeq.current) return;
 
       if (data.mode === "demo") {
         // No database configured — preset queue, one page.
         setMode("demo");
         setRows(SALES_LEADS);
+        setRecentRows(SALES_LEADS.slice(0, 6));
+        // The preset carries formatted labels, not ISO stamps — nothing to
+        // bucket, so the demo overview shows the histogram's empty state.
+        setHandoffs([]);
         setTotal(SALES_LEADS.length);
         setEngagedTotal(SALES_LEADS.filter((l) => l.engaged).length);
         setNeedsMigration(false);
@@ -166,21 +308,73 @@ export function SalesProvider({ children }: { children: ReactNode }) {
         }
       } else {
         setMode("live");
+        rawRows.current = data.rows;
         setRows(data.rows.map(toSalesLead));
+        setRecentRows((data.recent ?? []).map(toSalesLead));
+        setHandoffs(data.handoffs ?? []);
         setTotal(data.total);
         setEngagedTotal(data.engagedTotal);
         setNeedsMigration(!!data.needsMigration);
-        // queue shrank under us (deletes) — snap back to the last real page
+        setLatestAt(data.latestHandoffAt ?? "");
+
+        // Arrivals. The first response of the session only sets the
+        // watermark — a queue that was already full is not "new". After that,
+        // anything stamped later than the watermark is an arrival.
+        //
+        // Counted off the hand-off ROLL rather than the growth in `total`, so
+        // it stays exact when a return removes one lead in the same window that
+        // another arrives (which would otherwise cancel out), and so it sees
+        // arrivals regardless of which page the rep is paged to.
+        const seen = seenRef.current;
+        const latest = data.latestHandoffAt ?? "";
+        if (seen === null) {
+          seenRef.current = latest;
+          setSeenAt(latest);
+          setArrivals(0);
+        } else if (latest && latest > seen) {
+          const ids = arrivalIds(data.handoffs ?? [], seen);
+          setArrivals(ids.length);
+          // Arm the highlight from the same list the count came from. Guarded
+          // so a poll that finds the same batch doesn't re-render the queue.
+          if (ids.length > 0 && !sameIds(freshIdsRef.current, ids)) {
+            setFreshIds(new Set(ids));
+            freshAtRef.current = Date.now();
+          }
+        }
+
+        // Retire a highlight that has had its run. Checked on every poll, so it
+        // clears itself without needing a timer of its own.
+        if (freshAtRef.current > 0 && Date.now() - freshAtRef.current > HIGHLIGHT_MS) {
+          freshAtRef.current = 0;
+          setFreshIds(EMPTY_IDS);
+        }
+        totalRef.current = data.total;
+
+        // queue shrank under us (returns, deletes) — snap back to a real page
         const pageCount = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
         if (page > pageCount) setPageState(pageCount);
       }
-      setLoading(false);
-    })();
+      if (!silent) setLoading(false);
+    }
+  }
 
-    return () => {
-      cancelled = true;
+  // Realtime: silent background poll while the tab is visible, plus an instant
+  // pull on focus. This is how the desk hears admin without a manual refresh.
+  useEffect(() => {
+    const tick = () => {
+      if (document.visibilityState !== "visible") return;
+      void load(requestSeq.current, () => false, true);
     };
-  }, [page, reloadTick]);
+    const id = setInterval(tick, POLL_MS);
+    window.addEventListener("focus", tick);
+    document.addEventListener("visibilitychange", tick);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("focus", tick);
+      document.removeEventListener("visibilitychange", tick);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -191,10 +385,94 @@ export function SalesProvider({ children }: { children: ReactNode }) {
 
   const reload = useCallback(() => setReloadTick((t) => t + 1), []);
 
+  /**
+   * The rep has looked — advance the watermark so the modal and banner stand
+   * down. The row highlights deliberately STAY: acknowledging means "I know
+   * they arrived", not "I've found them in the list". They expire on their own
+   * (HIGHLIGHT_MS) or as each lead gets worked.
+   */
+  const acknowledgeArrivals = useCallback(() => {
+    seenRef.current = latestAt;
+    setSeenAt(latestAt);
+    setArrivals(0);
+  }, [latestAt]);
+
+  /**
+   * Send a lead back to admin. The server records the return (with the note)
+   * and clears the hand-off, which is what removes it from this queue — so we
+   * just reload afterwards rather than guessing at the new state.
+   */
+  const returnLeads = useCallback(
+    async (ids: string[], note: string): Promise<string | null> => {
+      const leadIds = [...new Set(ids.filter(Boolean))];
+      if (leadIds.length === 0) return null;
+      const many = leadIds.length > 1;
+
+      if (mode === "demo") {
+        // No ledger to write to — drop them from the preset so the flow still
+        // demonstrates end to end.
+        const gone = new Set(leadIds);
+        setRows((prev) => prev.filter((l) => !gone.has(l.id)));
+        setTotal((t) => Math.max(0, t - leadIds.length));
+        return null;
+      }
+      try {
+        const res = await fetch("/api/sales/handoff", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...adminHeaders() },
+          body: JSON.stringify({ kind: "returned", leadIds, note: note.trim() || undefined }),
+        });
+        const data = (await res.json().catch(() => null)) as SalesHandoffResponse | null;
+        if (!res.ok || !data?.ok) {
+          return data?.error ?? `Couldn't return ${many ? "those leads" : "that lead"} (${res.status}).`;
+        }
+        reload();
+        return null;
+      } catch {
+        return `Network error returning ${many ? "the leads" : "the lead"}.`;
+      }
+    },
+    [mode, reload],
+  );
+
   const leads = useMemo(
     () => rows.map((l) => (overrides[l.id] ? { ...l, ...overrides[l.id] } : l)),
     [rows, overrides],
   );
+
+  const recent = useMemo(
+    () => recentRows.map((l) => (overrides[l.id] ? { ...l, ...overrides[l.id] } : l)),
+    [recentRows, overrides],
+  );
+
+  // Hand-off volume + the last-24h tally, bucketed locally (see lib/data/buckets)
+  // so the desk's bars line up with the rep's own days.
+  const handoffDates = useMemo(() => parseStamps(handoffs.map((h) => h.at)), [handoffs]);
+  const series = useMemo(
+    () => (handoffDates.length > 0 ? volumeSeries(handoffDates) : EMPTY_SERIES),
+    [handoffDates],
+  );
+  const handedToday = useMemo(() => countLast24h(handoffDates), [handoffDates]);
+  const queuedIds = useMemo(
+    () => new Set(handoffs.map((h) => h.leadId)) as ReadonlySet<string>,
+    [handoffs],
+  );
+
+  // Mirror of freshIds for the poll closure (which is re-created each render
+  // and must not compare against a stale set).
+  const freshIdsRef = useRef<ReadonlySet<string>>(EMPTY_IDS);
+  freshIdsRef.current = freshIds;
+
+  /** Acting on a lead is the clearest possible "I've seen this one" — drop its
+   *  highlight rather than leaving it marked as new after it's been worked. */
+  const clearHighlight = useCallback((id: string) => {
+    setFreshIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  }, []);
 
   /** what a lead is showing right now: its override, else the server/preset row */
   const statusOf = useCallback(
@@ -211,17 +489,19 @@ export function SalesProvider({ children }: { children: ReactNode }) {
   const markContacted = useCallback(
     (id: string) => {
       pushStatus(id, statusOf(id));
+      clearHighlight(id);
       setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], status: "contacted" } }));
     },
-    [pushStatus, statusOf],
+    [pushStatus, statusOf, clearHighlight],
   );
 
   const markLost = useCallback(
     (id: string) => {
       pushStatus(id, statusOf(id));
+      clearHighlight(id);
       setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], status: "closed_lost" } }));
     },
-    [pushStatus, statusOf],
+    [pushStatus, statusOf, clearHighlight],
   );
 
   const closeDeal = useCallback(
@@ -233,6 +513,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
         closedAt: shortDate(),
       };
       pushStatus(id, statusOf(id));
+      clearHighlight(id);
       setOverrides((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
       // snapshot for the Closed-deals tab so it survives paging away
       const lead = rows.find((l) => l.id === id);
@@ -240,7 +521,7 @@ export function SalesProvider({ children }: { children: ReactNode }) {
         setClosedDeals((prev) => [{ ...lead, ...patch }, ...prev.filter((l) => l.id !== id)]);
       }
     },
-    [rows, pushStatus, statusOf],
+    [rows, pushStatus, statusOf, clearHighlight],
   );
 
   const revertStatus = useCallback(
@@ -297,6 +578,11 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       closedDeals,
       stats,
       total,
+      recent,
+      series,
+      handedToday,
+      queuedIds,
+      latestHandoffAt: latestAt,
       page,
       pageCount,
       pageSize: PAGE_SIZE,
@@ -304,11 +590,16 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       mode,
       error,
       needsMigration,
+      arrivals,
+      freshIds,
+      acknowledgeArrivals,
       setPage,
       reload,
+      statusOf,
       markContacted,
       markLost,
       closeDeal,
+      returnLeads,
       revertStatus,
     }),
     [
@@ -316,17 +607,27 @@ export function SalesProvider({ children }: { children: ReactNode }) {
       closedDeals,
       stats,
       total,
+      recent,
+      series,
+      handedToday,
+      queuedIds,
+      latestAt,
       page,
       pageCount,
       loading,
       mode,
       error,
       needsMigration,
+      arrivals,
+      freshIds,
+      acknowledgeArrivals,
       setPage,
       reload,
+      statusOf,
       markContacted,
       markLost,
       closeDeal,
+      returnLeads,
       revertStatus,
     ],
   );

@@ -1,5 +1,6 @@
 import { isUuid, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import {
+  CUSTOMER_JOURNEY_EVENTS,
   isMissingPortalTable,
   portalAdminAuthorized,
   type AnonymousPortalActivity,
@@ -54,27 +55,11 @@ const ANON_PORTAL_EVENT_NAMES = new Set([
   "portal_consent_accept",
 ]);
 
-/** Attributed rows are NOT customer-side by construction: the /t/[id] redirect
- *  sets the long-lived apmg_ref cookie on THIS origin, so an operator who
- *  test-clicks a tracked outreach link stamps that lead's uuid onto every
- *  dashboard data-track click they make from then on (sidebar_nav,
- *  pipeline_row… — /api/portal/events copies lead_id from the cookie onto the
- *  whole batch). Only the customer-journey contract names may enter a lead's
- *  timeline/firstSeen/lastSeen — everything else is internal click noise, not
- *  lead activity. portal_inquiry_submit stays out too (the client duplicate of
- *  the server-canonical portal_inquiry — one submission must read as one). */
-const ATTRIBUTED_EVENT_NAMES = new Set([
-  "attribution_click",
-  "portal_view",
-  "portal_service_open",
-  "portal_inquiry",
-  // Consent trail: `legal_ack` = the page-entry "I Accept & Continue" gate
-  // (client-emitted, portal-only); `portal_consent_accept` = the validated
-  // enquiry-form consent (server-emitted, reserved name). Both are customer-
-  // journey events — they only ever fire on the public portal.
-  "legal_ack",
-  "portal_consent_accept",
-]);
+/** The one customer-journey allowlist (lib/portal/server) — an operator who
+ *  test-clicked a tracked link carries that lead's cookie, so their dashboard
+ *  clicks would otherwise land in the trail. Shared with the per-enquiry
+ *  summary route so both readers see the same trail. */
+const ATTRIBUTED_EVENT_NAMES = new Set<string>(CUSTOMER_JOURNEY_EVENTS);
 const ATTRIBUTED_QUERY =
   `portal_events?select=event,props,lead_id,campaign,category,created_at` +
   `&lead_id=not.is.null&event=in.(${[...ATTRIBUTED_EVENT_NAMES].join(",")})` +
@@ -256,7 +241,7 @@ export async function GET(req: Request): Promise<Response> {
         firstSeen: row.created_at,
         lastSeen: row.created_at,
         newestFirst: [],
-        counts: { emailClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0 },
+        counts: { emailClicks: 0, portalViews: 0, serviceOpens: 0, inquiries: 0, chatPrompts: 0 },
       };
       byLead.set(row.lead_id, bucket);
     }
@@ -271,6 +256,7 @@ export async function GET(req: Request): Promise<Response> {
     else if (row.event === "portal_view") bucket.counts.portalViews += 1;
     else if (row.event === "portal_service_open") bucket.counts.serviceOpens += 1;
     else if (row.event === "portal_inquiry") bucket.counts.inquiries += 1;
+    else if (row.event === "chat_prompt") bucket.counts.chatPrompts += 1;
 
     if (bucket.newestFirst.length < MAX_EVENTS_PER_LEAD) {
       bucket.newestFirst.push({

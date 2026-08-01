@@ -88,6 +88,39 @@ export interface PortalSummary {
   }>;
 }
 
+/* ─────────────────────  who the Sales desk may see  ───────────────────── */
+
+/**
+ * Real inbound enquirers — people who genuinely submitted the portal form on
+ * their own initiative, rather than rows the list inherits through outreach
+ * attribution.
+ *
+ * The Sales Enquiries tab is scoped to the leads admin handed over (see
+ * `salesCanSeeEnquiry`), and these names are the standing exception: a genuine
+ * enquiry IS the rep's work whether or not its business was ever in the queue.
+ *
+ * It's an explicit list because nothing in the stored row distinguishes a real
+ * enquiry from an attributed one — matched on the submitted name, normalised
+ * for case and inner whitespace.
+ */
+export const GENUINE_ENQUIRERS: readonly string[] = ["nicole parseghian"];
+
+function normalizeName(name: string | null): string {
+  return (name ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Whether a rep may see this enquiry: it belongs to one of the leads admin
+ * handed the desk, or it's a genuine inbound enquirer.
+ *
+ * `queuedIds` is the hand-off roll from SalesProvider. Admin is never filtered —
+ * only call this for the sales role.
+ */
+export function salesCanSeeEnquiry(q: PortalInquiry, queuedIds: ReadonlySet<string>): boolean {
+  if (q.leadId && queuedIds.has(q.leadId)) return true;
+  return GENUINE_ENQUIRERS.includes(normalizeName(q.name));
+}
+
 /* ───────────────────────────  display helpers  ─────────────────────────── */
 
 /** Short display labels for the ServicesPortal slugs (+ the `general`
@@ -188,7 +221,16 @@ export const DEMO_SUMMARY: PortalSummary = {
   ],
 };
 
-/** Believable Melbourne enquiries — newest first, like the API returns. */
+/**
+ * Believable Melbourne enquiries — newest first, like the API returns.
+ *
+ * The `leadId`s deliberately line up with DEMO_LEAD_ACTIVITY in
+ * lib/data/leadActivity.ts, business for business, so a row's "View" modal shows
+ * the trail that belongs to it. The two rows whose businesses have no demo trail
+ * (Horizon Body Corporate, Wattle Grove) carry ids that match nothing on
+ * purpose: they exercise the "no tracked trail" state the modal has to handle
+ * for real direct enquirers.
+ */
 export const DEMO_INQUIRIES: PortalInquiry[] = [
   {
     id: "demo-enq-01",
@@ -233,7 +275,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     phone: "(03) 8610 4455",
     message:
       "We manage a 48-lot complex in Docklands with a recurring leak in the basement carpark riser. After a plumber who can do a camera inspection and provide a written report for the owners corporation meeting on the 24th.",
-    leadId: "demo-lead-03",
+    leadId: "demo-lead-06",
     business: "Horizon Body Corporate Services",
     campaign: "strata-melb-jun",
     category: "Body corporate & strata",
@@ -250,7 +292,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     phone: "(03) 9482 7731",
     message:
       "Our primary school in Northcote needs the emergency exit lighting tested and tagged before the compliance audit in August, plus four new external sensor lights by the gym. Do you carry Working with Children checks for on-site staff?",
-    leadId: "demo-lead-04",
+    leadId: "demo-lead-03",
     business: "Merri Creek Primary School",
     campaign: "schools-melb-jul",
     category: "Schools & education",
@@ -267,7 +309,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     phone: "0433 217 660",
     message:
       "Level 3 tenancy in our Collins Street building is being refit — roughly 240 sqm of carpet tiles to replace, ideally over two weekends. After a supply-and-install quote with lead times.",
-    leadId: "demo-lead-05",
+    leadId: "demo-lead-04",
     business: "Collins Street Property Group",
     campaign: "commercial-pm-jun",
     category: "Commercial property management",
@@ -301,7 +343,7 @@ export const DEMO_INQUIRIES: PortalInquiry[] = [
     phone: "(03) 9560 2218",
     message:
       "We run a childcare centre in Glen Waverley and are looking to consolidate our trades under one provider — painting touch-ups, a sticking gate, and a leaking tap for starters. Keen to understand how your one-call arrangement works.",
-    leadId: "demo-lead-07",
+    leadId: "demo-lead-05",
     business: "Bright Beginnings Childcare",
     campaign: "childcare-melb-jul",
     category: "Childcare & early learning",

@@ -37,7 +37,9 @@ export const ROLES: Record<Role, RoleDef> = {
     permissions: [
       "overview.view",
       "sales.view",
-      "leads.view",
+      // Deliberately NO `leads.view`: reps work the handed-over queue, not the
+      // whole lead database, so the Leads tab stays off their dashboard.
+      // `leads.contact`/`leads.close` are the actions they take on queue rows.
       "leads.contact",
       "leads.close",
       "leads.export",

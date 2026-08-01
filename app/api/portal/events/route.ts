@@ -45,6 +45,9 @@ const SERVER_RESERVED_EVENT_NAMES = new Set([
   // The send ledger (/api/pipeline/campaigns/send) — it gates the Sales queue
   // and the reports, so a forged row would fabricate outreach history.
   "email_sent",
+  // The admin → Sales hand-off ledger (/api/sales/handoff) — it records an
+  // OPERATOR decision, so nothing client-side may ever write it.
+  "sales_handoff",
 ]);
 /** Trust the browser clock only within a week of ours — beyond that the
  *  client_ts would poison time-series analysis, so store null instead. */

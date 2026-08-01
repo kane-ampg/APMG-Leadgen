@@ -6,6 +6,7 @@ import {
   Braces,
   BookOpen,
   Check,
+  ChevronDown,
   Cpu,
   Link2,
   Loader2,
@@ -319,20 +320,28 @@ export function ComposerConfigPage() {
         {/* model */}
         <Reveal delay={0.04}>
           <SectionCard icon={Cpu} title="Claude engine model" hint="structured-output models only">
-            <select
-              value={form!.model}
-              onChange={(e) => patch({ model: e.target.value })}
-              data-track="composer_model"
-              aria-label="Claude model"
-              className="h-9 w-full max-w-sm rounded-lg border border-border bg-background px-2.5 font-mono text-[12px] text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              {models.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                  {m === defaults.model ? "  (default)" : ""}
-                </option>
-              ))}
-            </select>
+            {/* the app's own caret behind the control (matches the leads +
+                telemetry filters); native arrows differ per platform */}
+            <div className="relative w-full max-w-sm">
+              <select
+                value={form!.model}
+                onChange={(e) => patch({ model: e.target.value })}
+                data-track="composer_model"
+                aria-label="Claude model"
+                className="h-9 w-full min-w-0 cursor-pointer appearance-none truncate rounded-lg border border-border bg-background pl-2.5 pr-8 font-mono text-[12px] text-foreground transition-colors duration-200 hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {models.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                    {m === defaults.model ? "  (default)" : ""}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                className="pointer-events-none absolute right-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+                aria-hidden
+              />
+            </div>
             <p className="mt-2.5 font-mono text-[10.5px] leading-relaxed text-muted-foreground">
               Only structured-output models are offered (a bad value would 404 every draft). The
               COMPOSE_MODEL env var is the fallback when nothing is saved. max_tokens 1500 · 60s

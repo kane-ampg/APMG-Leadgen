@@ -10,6 +10,7 @@ import { cn } from "@/lib/cn";
 import { NAV, type TabId } from "@/lib/nav";
 import { useLeadStats } from "@/lib/data/useLeadStats";
 import { useLeadActivityUnseenTotal } from "@/lib/data/leadActivityNotifications";
+import { useHotLeadsWaiting } from "@/lib/data/hotLeads";
 import { formatInt } from "@/lib/format";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { useRbac } from "@/lib/rbac/RbacProvider";
@@ -50,6 +51,10 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
   // Sales badge = real queue size (leads the admin has emailed), hidden at zero.
   const { total: salesQueueTotal } = useSales();
   const salesBadge = salesQueueTotal > 0 ? formatInt(salesQueueTotal) : undefined;
+  // Hot Leads badge = leads scoring above the hot cut-off that HAVEN'T been
+  // handed to Sales yet — a work queue, so it's hidden once it's cleared.
+  const hotWaiting = useHotLeadsWaiting();
+  const hotBadge = hotWaiting > 0 ? formatInt(hotWaiting) : undefined;
   const ref = useRef<HTMLElement>(null);
   // Trap focus inside the drawer while it's open as a mobile overlay.
   useFocusTrap(mobileOpen, ref);
@@ -181,7 +186,9 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
                         ? pipelineBadge
                         : item.id === "sales"
                           ? salesBadge
-                          : item.badge;
+                          : item.id === "hot"
+                            ? hotBadge
+                            : item.badge;
                   // Telemetry's badge is a NOTIFICATION (new lead activity) —
                   // solid signal red, unlike the quiet informational counts.
                   const notify = item.id === "telemetry" && !!badge;

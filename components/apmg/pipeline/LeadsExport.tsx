@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FileDown, FileSpreadsheet, FileText, Printer } from "lucide-react";
+import { ChevronDown, FileDown, FileSpreadsheet, FileText, Printer } from "lucide-react";
 import { cn } from "@/lib/cn";
 import {
   exportLeadsCsv,
@@ -114,47 +114,61 @@ export function LeadsExportMenu({
       >
         <FileDown className="h-3.5 w-3.5" aria-hidden />
         Export
+        <ChevronDown
+          className={cn("h-3 w-3 transition-transform duration-200 ease-out", open && "rotate-180")}
+          aria-hidden
+        />
       </button>
 
-      {open && (
-        <div
-          role="menu"
-          aria-label="Export leads"
-          className="absolute right-0 top-full z-40 mt-2 w-64 rounded-xl border border-border bg-card p-2 shadow-lg ring-1 ring-foreground/10"
-        >
-          <div className="px-2 pb-1.5 pt-1">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-              Export leads
-            </div>
-            <div className="mt-0.5 truncate font-mono text-[10.5px] text-muted-foreground">{scopeHint}</div>
+      {/* Kept mounted so the close animates too (see `.apmg-menu` in
+          globals.css) — `aria-hidden` is belt-and-braces on top of the
+          visibility:hidden that already hides it from AT. */}
+      <div
+        role="menu"
+        aria-label="Export leads"
+        aria-hidden={!open}
+        data-open={open}
+        className="apmg-menu apmg-menu-end absolute right-0 top-full z-40 mt-2 w-[17.5rem] rounded-xl border border-border bg-card p-2 shadow-lg ring-1 ring-foreground/10"
+      >
+        <div className="px-2 pb-1.5 pt-1">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+            Export leads
           </div>
-          <div className="flex flex-col gap-0.5">
-            {items.map((item) => (
-              <button
-                key={item.kind}
-                type="button"
-                role="menuitem"
-                onClick={() => run(item.kind)}
-                data-track={`leads_export_${item.kind}`}
-                className="group flex w-full items-center gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted"
-              >
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors group-hover:border-primary/40 group-hover:text-primary">
-                  <item.icon className="h-3.5 w-3.5" aria-hidden />
-                </span>
-                <span className="min-w-0">
-                  <span className="block text-[12px] font-medium text-foreground">{item.label}</span>
-                  <span className="block truncate text-[10.5px] text-muted-foreground">{item.hint}</span>
-                </span>
-              </button>
-            ))}
+          <div className="mt-0.5 break-words font-mono text-[10.5px] leading-snug text-muted-foreground">
+            {scopeHint}
           </div>
-          {error && (
-            <p role="alert" className="px-2 pb-1 pt-1.5 font-mono text-[10.5px] leading-relaxed text-destructive">
-              {error}
-            </p>
-          )}
         </div>
-      )}
+        <div className="flex flex-col gap-0.5">
+          {items.map((item) => (
+            <button
+              key={item.kind}
+              type="button"
+              role="menuitem"
+              tabIndex={open ? 0 : -1}
+              onClick={() => run(item.kind)}
+              data-track={`leads_export_${item.kind}`}
+              className="group flex w-full items-start gap-2.5 rounded-lg px-2 py-2 text-left transition-colors hover:bg-muted"
+            >
+              <span className="mt-px flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors group-hover:border-primary/40 group-hover:text-primary">
+                <item.icon className="h-3.5 w-3.5" aria-hidden />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-[12px] font-medium text-foreground">{item.label}</span>
+                {/* wraps rather than truncating — the folder-split hints are
+                    longer than any fixed panel width can hold on one line */}
+                <span className="mt-0.5 block break-words text-[10.5px] leading-snug text-muted-foreground">
+                  {item.hint}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+        {error && (
+          <p role="alert" className="px-2 pb-1 pt-1.5 font-mono text-[10.5px] leading-relaxed text-destructive">
+            {error}
+          </p>
+        )}
+      </div>
     </div>
   );
 }

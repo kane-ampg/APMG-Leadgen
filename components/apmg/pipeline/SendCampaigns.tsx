@@ -1614,73 +1614,81 @@ function FolderChooser({
             )}
           </span>
           <ChevronDown
-            className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", open && "rotate-180")}
+            className={cn(
+              "h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ease-out",
+              open && "rotate-180",
+            )}
             aria-hidden
           />
         </button>
 
-        {open && (
-          <div
-            role="listbox"
-            aria-multiselectable="true"
-            className="absolute z-20 mt-1.5 w-full overflow-hidden rounded-lg border border-border bg-card shadow-lg ring-1 ring-foreground/5"
-          >
-            {folders.length > 1 && (
-              <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 font-mono text-[10px]">
+        {/* Kept mounted so the list animates shut as well as open — see
+            `.apmg-menu` in globals.css. */}
+        <div
+          role="listbox"
+          aria-multiselectable="true"
+          aria-hidden={!open}
+          data-open={open}
+          className="apmg-menu absolute z-20 mt-1.5 w-full overflow-hidden rounded-lg border border-border bg-card shadow-lg ring-1 ring-foreground/5"
+        >
+          {folders.length > 1 && (
+            <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 font-mono text-[10px]">
+              <button
+                type="button"
+                onClick={onSelectAll}
+                disabled={allOn}
+                data-track="campaign_folders_all"
+                className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                onClick={onClear}
+                disabled={folderSel.size === 0}
+                data-track="campaign_folders_clear"
+                className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+          <div className="max-h-64 overflow-y-auto py-1">
+            {folders.map((f) => {
+              const active = folderSel.has(f);
+              return (
                 <button
+                  key={f}
                   type="button"
-                  onClick={onSelectAll}
-                  disabled={allOn}
-                  data-track="campaign_folders_all"
-                  className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+                  role="option"
+                  aria-selected={active}
+                  onClick={() => onToggleFolder(f)}
+                  data-track="campaign_select_folder"
+                  className={cn(
+                    "flex w-full items-start gap-2 px-3 py-2 text-left text-xs transition-colors",
+                    active ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                  )}
                 >
-                  Select all
-                </button>
-                <button
-                  type="button"
-                  onClick={onClear}
-                  disabled={folderSel.size === 0}
-                  data-track="campaign_folders_clear"
-                  className="text-muted-foreground transition-colors hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  Clear
-                </button>
-              </div>
-            )}
-            <div className="max-h-64 overflow-y-auto py-1">
-              {folders.map((f) => {
-                const active = folderSel.has(f);
-                return (
-                  <button
-                    key={f}
-                    type="button"
-                    role="option"
-                    aria-selected={active}
-                    onClick={() => onToggleFolder(f)}
-                    data-track="campaign_select_folder"
+                  <span
                     className={cn(
-                      "flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors",
-                      active ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-foreground/5 hover:text-foreground",
+                      "mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                      active ? "border-primary bg-primary-solid text-primary-foreground" : "border-border",
                     )}
                   >
-                    <span
-                      className={cn(
-                        "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
-                        active ? "border-primary bg-primary-solid text-primary-foreground" : "border-border",
-                      )}
-                    >
-                      {active && <Check className="h-3 w-3" aria-hidden />}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate font-medium">{folderLabel(f)}</span>
-                    <span className="tnum shrink-0 font-mono text-[10px] text-muted-foreground">
-                      {(folderCounts.get(f) ?? 0).toLocaleString("en-US")}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
+                    {active && <Check className="h-3 w-3" aria-hidden />}
+                  </span>
+                  {/* folder names are user-supplied and can be long — wrap onto
+                      a second line rather than truncating the one thing the
+                      operator needs to read to pick correctly */}
+                  <span className="min-w-0 flex-1 break-words font-medium leading-snug">{folderLabel(f)}</span>
+                  <span className="tnum mt-px shrink-0 font-mono text-[10px] text-muted-foreground">
+                    {(folderCounts.get(f) ?? 0).toLocaleString("en-US")}
+                  </span>
+                </button>
+              );
+            })}
           </div>
-        )}
+        </div>
       </div>
     </div>
   );

@@ -3,22 +3,16 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
-  Activity,
   AlertTriangle,
   CheckCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Eye,
-  FileDown,
-  Globe,
   Inbox,
   LayoutGrid,
-  Mail,
   MousePointerClick,
   RefreshCw,
   Send,
-  ShieldCheck,
   Trash2,
   Users,
   type LucideIcon,
@@ -28,16 +22,15 @@ import {
   DEMO_ACTIVITY_TOTALS,
   DEMO_ANONYMOUS,
   DEMO_LEAD_ACTIVITY,
-  eventKind,
-  eventLabel,
   isHiddenEvent,
   serviceName,
   type ActivityTotals,
   type AnonymousActivity,
   type LeadActivity,
   type LeadActivityEvent,
-  type LeadEventKind,
 } from "@/lib/data/leadActivity";
+import { EventTrail, TimelineLine, fmtStamp } from "./LeadTrail";
+import { leadScore, scoreTier } from "@/lib/data/leadScore";
 import {
   ackAllLeadActivity,
   ackLeadActivity,
@@ -123,64 +116,6 @@ function activeEventCount(lead: LeadActivity): number {
   return lead.events.reduce((n, e) => n + (isHiddenEvent(e.event) ? 0 : 1), 0);
 }
 
-/* ───────────────────────────  lead score  ─────────────────────────── */
-
-/**
- * Intent score (0–100) per lead — a single readout of "how hot is this lead".
- * The rule the operator asked for: an ENQUIRY is always the best score. So the
- * funnel is banded, not additive — reaching a deeper stage sets a floor no
- * amount of shallower activity can beat:
- *
- *   enquired      → 90–100  (money event; the enquiry itself is worth ~1 lead)
- *   opened a svc  → 60–89   (strong intent — looked at what we sell)
- *   reached portal→ 35–59   (clicked through and browsed)
- *   just clicked  → 10–34   (opened the email link, went no further)
- *
- * Inside each band, repeat activity nudges the number up (capped to the band)
- * so two enquiries out-score one, ten service opens out-score two — but a
- * browser can never overtake an enquirer. Fully deterministic (no time decay)
- * so the same trail always scores the same, and the number matches the trail
- * the operator can count by eye.
- */
-function leadScore(lead: LeadActivity): number {
-  const { inquiries, serviceOpens, portalViews, emailClicks } = lead.counts;
-  // ramp: how far a count fills its band, saturating so extras keep adding but
-  // with diminishing return (1→~0.3, 3→~0.6, 6→~0.8, big→~1).
-  const ramp = (n: number, k: number) => (n <= 0 ? 0 : 1 - Math.exp(-n / k));
-  if (inquiries > 0) return Math.round(90 + 10 * ramp(inquiries, 2));
-  if (serviceOpens > 0) return Math.round(60 + 29 * ramp(serviceOpens, 4));
-  if (portalViews > 0) return Math.round(35 + 24 * ramp(portalViews, 4));
-  if (emailClicks > 0) return Math.round(10 + 24 * ramp(emailClicks, 4));
-  return 0;
-}
-
-type ScoreTier = { label: string; chip: string; ring: string };
-
-/** Which band a score sits in → its label + tone. The enquiry band is the
- *  loudest thing on the row (solid signal red), matching the "Enquired" pill
- *  and enquiry trail chip so the hottest leads read the same everywhere. */
-function scoreTier(score: number): ScoreTier {
-  if (score >= 90)
-    return {
-      label: "Hottest",
-      chip: "border-transparent bg-primary-solid text-primary-foreground",
-      ring: "text-primary-foreground/80",
-    };
-  if (score >= 60)
-    return { label: "Hot", chip: "border-primary/40 bg-primary/10 text-primary", ring: "text-primary/70" };
-  if (score >= 35)
-    return {
-      label: "Warm",
-      chip: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-      ring: "text-amber-500/70",
-    };
-  return {
-    label: "Cool",
-    chip: "border-border bg-background text-muted-foreground",
-    ring: "text-muted-foreground/60",
-  };
-}
-
 /** Sentinel for the "all sectors" chip (no `category` filter applied). */
 const ALL_SECTORS = "__all__";
 
@@ -232,6 +167,7 @@ function toLead(v: unknown): LeadActivity | null {
       emailClicks: num(c.emailClicks),
       portalViews: num(c.portalViews),
       serviceOpens: num(c.serviceOpens),
+      chatPrompts: num(c.chatPrompts),
       inquiries: num(c.inquiries),
     },
   };
@@ -269,18 +205,6 @@ function fmtWhen(iso: string): string {
   return new Date(t).toLocaleDateString("en-AU", { day: "numeric", month: "short" });
 }
 
-/** Absolute stamp for timeline lines, e.g. "4 Jul, 2:38 pm" (en-AU). */
-function fmtStamp(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString("en-AU", {
-    day: "numeric",
-    month: "short",
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 /** Row title when the lead row was deleted since the click (spec fallback). */
 function leadDisplayName(lead: LeadActivity): string {
   return lead.business ?? `Lead ${lead.leadId.slice(0, 8)}…`;
@@ -288,22 +212,9 @@ function leadDisplayName(lead: LeadActivity): string {
 
 const ratio = (count: number, total: number) => (total > 0 ? count / total : 0);
 
-/* ───────────────────────────  event-kind visuals  ─────────────────────────── */
-
-/** Icon + chip tone per event kind. The enquiry chip is the loudest thing on
- *  the page (solid signal red) — it's the money event; downloads get a red
- *  outline (strong intent); everything else stays quiet neutral so the trail
- *  reads as texture with the conversions popping out of it. */
-const KIND_META: Record<LeadEventKind, { icon: LucideIcon; chip: string }> = {
-  email: { icon: Mail, chip: "border-border bg-background text-muted-foreground" },
-  download: { icon: FileDown, chip: "border-primary/40 bg-background text-primary" },
-  view: { icon: Eye, chip: "border-border bg-background text-muted-foreground" },
-  service: { icon: LayoutGrid, chip: "border-border bg-muted text-foreground" },
-  enquiry: { icon: Send, chip: "border-transparent bg-primary-solid text-primary-foreground" },
-  website: { icon: Globe, chip: "border-border bg-background text-muted-foreground" },
-  consent: { icon: ShieldCheck, chip: "border-border bg-background text-muted-foreground" },
-  other: { icon: Activity, chip: "border-dashed border-border bg-background text-muted-foreground" },
-};
+/* Event-kind visuals (KIND_META), the compact EventTrail and the expanded
+   TimelineLine live in ./LeadTrail — shared with the Enquiries tab's activity
+   modal so a trail reads the same on both surfaces. */
 
 /* ───────────────────────────  KPI cards  ─────────────────────────── */
 
@@ -417,89 +328,6 @@ function PanelEmpty({ icon: Icon, hint }: { icon: LucideIcon; hint: string }) {
         {hint}
       </p>
     </div>
-  );
-}
-
-/* ───────────────────────────  the event trail (the heart)  ─────────────────────────── */
-
-/** How many chips the compact trail shows before folding the OLDEST clicks
- *  into a "+N" stub — recency matters most, and the expanded timeline always
- *  has the full story. */
-const TRAIL_MAX = 10;
-
-/**
- * Compact horizontal trail: one icon chip per event, chronological left →
- * right with tiny arrows between. Marked aria-hidden as a whole — it's a
- * visual summary; screen readers get the counts in the row's aria-label and
- * the full textual timeline behind the expand toggle.
- */
-function EventTrail({ events }: { events: LeadActivityEvent[] }) {
-  const shown = events.length > TRAIL_MAX ? events.slice(events.length - TRAIL_MAX) : events;
-  const folded = events.length - shown.length;
-  return (
-    // <span>, not <div>: this renders inside the row's <button>, which only
-    // permits phrasing content — a div would be invalid HTML there.
-    <span className="flex min-w-0 flex-wrap items-center gap-y-1.5" aria-hidden>
-      {folded > 0 && (
-        <span className="tnum mr-1 inline-flex h-6 shrink-0 items-center rounded-full border border-border bg-background px-2 font-mono text-[9.5px] text-muted-foreground">
-          +{folded}
-        </span>
-      )}
-      {shown.map((ev, i) => {
-        const kind = eventKind(ev);
-        const Icon = KIND_META[kind].icon;
-        return (
-          <span key={`${ev.ts}-${i}`} className="flex items-center">
-            {(i > 0 || folded > 0) && (
-              <ChevronRight className="mx-0.5 h-3 w-3 shrink-0 text-muted-foreground/40" />
-            )}
-            <span
-              title={`${eventLabel(ev)} · ${fmtStamp(ev.ts)}`}
-              className={cn(
-                "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border",
-                KIND_META[kind].chip,
-              )}
-            >
-              <Icon className="h-3 w-3" />
-            </span>
-          </span>
-        );
-      })}
-    </span>
-  );
-}
-
-/** One line of the expanded timeline: stamp · icon dot (with connector rail)
- *  · plain-English label. Enquiries render emphasised in signal red. */
-function TimelineLine({ ev, last }: { ev: LeadActivityEvent; last: boolean }) {
-  const kind = eventKind(ev);
-  const Icon = KIND_META[kind].icon;
-  return (
-    <li className="flex gap-3">
-      <span className="tnum w-24 shrink-0 pt-1 text-right font-mono text-[10px] leading-4 text-muted-foreground">
-        {fmtStamp(ev.ts)}
-      </span>
-      <span className="flex flex-col items-center" aria-hidden>
-        <span
-          className={cn(
-            "flex h-6 w-6 shrink-0 items-center justify-center rounded-full border",
-            KIND_META[kind].chip,
-          )}
-        >
-          <Icon className="h-3 w-3" />
-        </span>
-        {!last && <span className="w-px flex-1 bg-border/70" />}
-      </span>
-      <span
-        className={cn(
-          "min-w-0 pt-1 text-[12.5px] leading-4",
-          last ? "pb-1" : "pb-4",
-          kind === "enquiry" ? "font-semibold text-primary" : "text-foreground/90",
-        )}
-      >
-        {eventLabel(ev)}
-      </span>
-    </li>
   );
 }
 

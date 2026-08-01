@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { CalendarDays, FileDown, Loader2 } from "lucide-react";
+import { CalendarDays, ChevronDown, FileDown, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { serviceName } from "@/lib/data/leadActivity";
 import { formatInt } from "@/lib/format";
@@ -460,94 +460,100 @@ export function TelemetryReportExport({ demo }: { demo: boolean }) {
       >
         <FileDown className="h-3.5 w-3.5" aria-hidden />
         Export PDF
+        <ChevronDown
+          className={cn("h-3 w-3 transition-transform duration-200 ease-out", open && "rotate-180")}
+          aria-hidden
+        />
       </button>
 
-      {open && (
-        <div
-          role="dialog"
-          aria-label="Export a period report"
-          className="absolute right-0 top-full z-40 mt-2 w-72 rounded-xl border border-border bg-card p-3 shadow-lg ring-1 ring-foreground/10"
-        >
-          <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
-            Report period
-          </div>
-
-          {/* granularity segments */}
-          <div className="mt-2 grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-border bg-border">
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => setMode(m.id)}
-                aria-pressed={mode === m.id}
-                data-track="telemetry_report_mode"
-                data-track-mode={m.id}
-                className={cn(
-                  "px-2 py-1.5 text-[11px] font-medium transition-colors",
-                  mode === m.id
-                    ? "bg-primary-solid text-primary-foreground"
-                    : "bg-background text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {m.label}
-              </button>
-            ))}
-          </div>
-
-          {/* one date input drives all three granularities (see docblock) */}
-          <label
-            htmlFor="telemetry-report-date"
-            className="mt-3 block text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground"
-          >
-            {mode === "day" ? "Date" : mode === "week" ? "Any day in the week" : "Any day in the month"}
-          </label>
-          <input
-            id="telemetry-report-date"
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="mt-1 h-8 w-full rounded-lg border border-input bg-background px-2.5 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          />
-
-          {/* resolved-window preview: what the PDF will actually cover */}
-          <p className="mt-2 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-muted-foreground">
-            <CalendarDays className="mt-px h-3 w-3 shrink-0" aria-hidden />
-            <span>
-              {period ? <span className="font-medium text-foreground">{period.label}</span> : "Pick a date"}
-              {" — "}
-              {MODE_HINT[mode]}
-            </span>
-          </p>
-
-          {demo && (
-            <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-amber-600 dark:text-amber-400">
-              Demo data — connect Supabase to export live reports.
-            </p>
-          )}
-          {error && (
-            <p role="alert" className="mt-2 font-mono text-[10.5px] leading-relaxed text-destructive">
-              {error}
-            </p>
-          )}
-
-          <div className="mt-3 flex items-center justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              size="sm"
-              onClick={generate}
-              disabled={!period || busy || demo}
-              data-track="telemetry_report_generate"
-              data-track-mode={mode}
-              className="gap-1.5 bg-primary-solid text-primary-foreground hover:bg-primary-solid/90"
-            >
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <FileDown className="h-3.5 w-3.5" aria-hidden />}
-              {busy ? "Building…" : "Generate PDF"}
-            </Button>
-          </div>
+      {/* Kept mounted so closing animates as smoothly as opening — see
+          `.apmg-menu` in globals.css. */}
+      <div
+        role="dialog"
+        aria-label="Export a period report"
+        aria-hidden={!open}
+        data-open={open}
+        className="apmg-menu apmg-menu-end absolute right-0 top-full z-40 mt-2 w-72 rounded-xl border border-border bg-card p-3 shadow-lg ring-1 ring-foreground/10"
+      >
+        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+          Report period
         </div>
-      )}
+
+        {/* granularity segments */}
+        <div className="mt-2 grid grid-cols-3 gap-px overflow-hidden rounded-lg border border-border bg-border">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() => setMode(m.id)}
+              aria-pressed={mode === m.id}
+              data-track="telemetry_report_mode"
+              data-track-mode={m.id}
+              className={cn(
+                "px-2 py-1.5 text-[11px] font-medium transition-colors",
+                mode === m.id
+                  ? "bg-primary-solid text-primary-foreground"
+                  : "bg-background text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+
+        {/* one date input drives all three granularities (see docblock) */}
+        <label
+          htmlFor="telemetry-report-date"
+          className="mt-3 block text-[10px] font-medium uppercase tracking-[0.1em] text-muted-foreground"
+        >
+          {mode === "day" ? "Date" : mode === "week" ? "Any day in the week" : "Any day in the month"}
+        </label>
+        <input
+          id="telemetry-report-date"
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+          className="mt-1 h-8 w-full rounded-lg border border-input bg-background px-2.5 text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+
+        {/* resolved-window preview: what the PDF will actually cover */}
+        <p className="mt-2 flex items-start gap-1.5 text-[10.5px] leading-relaxed text-muted-foreground">
+          <CalendarDays className="mt-px h-3 w-3 shrink-0" aria-hidden />
+          <span>
+            {period ? <span className="font-medium text-foreground">{period.label}</span> : "Pick a date"}
+            {" — "}
+            {MODE_HINT[mode]}
+          </span>
+        </p>
+
+        {demo && (
+          <p className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-amber-600 dark:text-amber-400">
+            Demo data — connect Supabase to export live reports.
+          </p>
+        )}
+        {error && (
+          <p role="alert" className="mt-2 font-mono text-[10.5px] leading-relaxed text-destructive">
+            {error}
+          </p>
+        )}
+
+        <div className="mt-3 flex items-center justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            onClick={generate}
+            disabled={!period || busy || demo}
+            data-track="telemetry_report_generate"
+            data-track-mode={mode}
+            className="gap-1.5 bg-primary-solid text-primary-foreground hover:bg-primary-solid/90"
+          >
+            {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <FileDown className="h-3.5 w-3.5" aria-hidden />}
+            {busy ? "Building…" : "Generate PDF"}
+          </Button>
+        </div>
+      </div>
     </div>
   );
 }

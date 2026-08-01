@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Bar } from "./leads";
+import { parseStamps, volumeSeries } from "./buckets";
 import type { LeadView } from "@/components/apmg/pipeline/LeadsTable";
 
 // keep in sync with UNGROUPED in lib/pipeline/server.ts
@@ -67,18 +68,6 @@ interface BatchesResponse {
   needsMigration?: boolean;
 }
 
-function startOfDay(d: Date): Date {
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
-}
-
-/** Monday-anchored start of the week containing `d`. */
-function startOfWeek(d: Date): Date {
-  const x = startOfDay(d);
-  const offset = (x.getDay() + 6) % 7; // 0 = Monday
-  x.setDate(x.getDate() - offset);
-  return x;
-}
-
 function ratingOf(r: LeadView): number {
   return typeof r.rating === "number"
     ? r.rating
@@ -86,45 +75,6 @@ function ratingOf(r: LeadView): number {
       ? Number.parseFloat(r.rating)
       : Number.NaN;
 }
-
-/**
- * Generic time-bucketing: groups rows by a period key, keeps the most recent
- * `cap` buckets oldest → newest, and marks the newest as `current`.
- */
-function bucketBy(
-  rows: LeadView[],
-  startOf: (d: Date) => Date,
-  label: (d: Date) => string,
-  cap: number,
-): Bar[] {
-  const map = new Map<number, { date: Date; count: number }>();
-  for (const r of rows) {
-    if (!r.created_at) continue;
-    const d = new Date(r.created_at);
-    if (Number.isNaN(d.getTime())) continue;
-    const start = startOf(d);
-    const key = start.getTime();
-    const cur = map.get(key);
-    if (cur) cur.count += 1;
-    else map.set(key, { date: start, count: 1 });
-  }
-  const tail = [...map.values()]
-    .sort((a, b) => a.date.getTime() - b.date.getTime())
-    .slice(-cap);
-  return tail.map((e, i) => ({
-    label: label(e.date),
-    value: e.count,
-    current: i === tail.length - 1,
-  }));
-}
-
-const monthDay = (d: Date) => d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-const monthOnly = (d: Date) => d.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-
-const computeByDay = (rows: LeadView[]) => bucketBy(rows, startOfDay, monthDay, 14);
-const computeByWeek = (rows: LeadView[]) => bucketBy(rows, startOfWeek, monthDay, 12);
-const computeByMonth = (rows: LeadView[]) =>
-  bucketBy(rows, (d) => new Date(d.getFullYear(), d.getMonth(), 1), monthOnly, 12);
 
 /**
  * @param pollMs  when set, silently refetches on this interval (and on window
@@ -209,6 +159,8 @@ export function useLeadStats({ pollMs }: { pollMs?: number } = {}): {
             ? new Set(rows.map((r) => r.batch ?? UNGROUPED)).size
             : 0;
 
+      const series = volumeSeries(parseStamps(rows.map((r) => r.created_at)));
+
       setState({
         status: "ready",
         data: {
@@ -223,9 +175,9 @@ export function useLeadStats({ pollMs }: { pollMs?: number } = {}): {
           folders,
           latestImport: latest != null ? new Date(latest).toISOString() : null,
           addedToday,
-          byDay: computeByDay(rows),
-          byWeek: computeByWeek(rows),
-          byMonth: computeByMonth(rows),
+          byDay: series.byDay,
+          byWeek: series.byWeek,
+          byMonth: series.byMonth,
           recent: rows.slice(0, 6),
         },
       });

@@ -13,6 +13,11 @@ export default async function Page() {
   const raw = store.get(USER_COOKIE)?.value;
   const user = findUser(raw ? decodeURIComponent(raw) : null);
 
+  // NOTE: the role's starting theme (light for Sales reps) is seeded at
+  // SIGN-IN — lib/auth/session.ts → seedThemeForRole — not with a second
+  // bootstrap script here. React never executes a <script> it renders on the
+  // client, so an extra one in the tree only earns a console warning; the root
+  // layout's single inline bootstrap is the one that runs before paint.
   return (
     <RbacProvider initialRole={user?.role} locked={!!user}>
       <SalesProvider>

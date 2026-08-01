@@ -171,6 +171,51 @@
   :root:not(.dark) .chassis-grain::before {
     opacity: 0.03;
   }
+
+  /* ── Dropdown panels (Export menus, folder pickers) ──────────────────────
+     The panel stays mounted and flips `data-open`, so opening AND closing both
+     animate — a `{open && …}` mount can only ever animate the way in, and the
+     way out reads as a hard cut.
+
+     `visibility` (not `display`) does the hiding: it is transitionable, and a
+     visibility:hidden subtree is already out of the tab order and out of the
+     accessibility tree, so a closed menu can't be tabbed into. */
+  .apmg-menu {
+    /* A fixed w-64/w-72 panel would clip against a phone's screen edge; clamp
+       to the viewport so long option labels wrap instead of running off. */
+    max-width: calc(100vw - 1.5rem);
+    transform-origin: top center;
+    visibility: hidden;
+    pointer-events: none;
+    opacity: 0;
+    transform: translateY(-0.25rem) scale(0.97);
+    transition:
+      opacity 160ms ease-out,
+      transform 200ms cubic-bezier(0.16, 1, 0.3, 1),
+      visibility 200ms linear;
+  }
+  .apmg-menu[data-open="true"] {
+    visibility: visible;
+    pointer-events: auto;
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  /* Right-anchored menus should grow out of the button they hang from. */
+  .apmg-menu-end {
+    transform-origin: top right;
+  }
+
+  /* Reduced motion keeps the fade (opacity is not vestibular) but drops the
+     travel + scale entirely (§14.5). */
+  @media (prefers-reduced-motion: reduce) {
+    .apmg-menu,
+    .apmg-menu[data-open="true"] {
+      transform: none;
+      transition:
+        opacity 120ms linear,
+        visibility 120ms linear;
+    }
+  }
 }
 
 /* Click-ping bloom — the telemetry signature (ClickPing.tsx). */

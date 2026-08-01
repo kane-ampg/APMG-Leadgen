@@ -1,3 +1,4 @@
+import { seedThemeForRole } from "@/lib/theme";
 import { type AppUser } from "./users";
 
 /**
@@ -14,6 +15,11 @@ export const ROLE_COOKIE = "apmg-role";
 export function setSessionCookies(user: AppUser): void {
   document.cookie = `${ROLE_COOKIE}=${user.role}; path=/; max-age=${MAX_AGE}; samesite=lax`;
   document.cookie = `${USER_COOKIE}=${encodeURIComponent(user.email)}; path=/; max-age=${MAX_AGE}; samesite=lax`;
+  // Sign-in is the moment to pick a starting theme (Sales reps land in light).
+  // Sign-in always does a full navigation afterwards, so the root layout's
+  // bootstrap reads this on the very next paint — no flash, and no second
+  // inline script anywhere in the app.
+  seedThemeForRole(user.role);
 }
 
 export function clearSessionCookies(): void {

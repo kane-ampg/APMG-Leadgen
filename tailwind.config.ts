@@ -111,11 +111,20 @@ const config: Config = {
           "0%, 100%": { opacity: "1" },
           "50%": { opacity: "0.15" },
         },
+        // A row/card that just arrived from admin announces itself once and
+        // settles — a finite wash, not a loop, so a queue full of new leads
+        // doesn't end up strobing at the rep.
+        arrival: {
+          "0%": { transform: "translateY(-4px)", opacity: "0.35" },
+          "60%": { transform: "translateY(0)", opacity: "1" },
+          "100%": { transform: "translateY(0)", opacity: "1" },
+        },
       },
       animation: {
         "signal-ping": "signal-ping 1.8s cubic-bezier(0.16, 1, 0.3, 1) infinite",
         "bar-rise": "bar-rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both",
         "notify-blink": "notify-blink 1.1s cubic-bezier(0.4, 0, 0.6, 1) infinite",
+        arrival: "arrival 0.7s cubic-bezier(0.16, 1, 0.3, 1) both",
       },
     },
   },

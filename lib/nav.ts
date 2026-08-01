@@ -2,6 +2,7 @@ import {
   Activity,
   BookOpen,
   Filter,
+  Flame,
   Handshake,
   HardHat,
   Inbox,
@@ -22,6 +23,7 @@ export type TabId =
   | "overview"
   | "pipeline"
   | "leads"
+  | "hot"
   | "enquiries"
   | "sales"
   | "closed"
@@ -59,6 +61,11 @@ export const NAV: NavSection[] = [
       { id: "overview", label: "Overview", icon: LayoutDashboard, perm: "overview.view" },
       { id: "pipeline", label: "Pipeline", icon: Filter, perm: "pipeline.view" },
       { id: "leads", label: "Leads", icon: Users, perm: "leads.view" },
+      // Sits directly under Leads: same lead database, filtered to the ones
+      // whose behaviour earned an intent score above the hot cut-off. The
+      // badge (live, injected by the Sidebar) counts those still awaiting
+      // hand-off to Sales.
+      { id: "hot", label: "Hot Leads", icon: Flame, perm: "hotleads.view" },
       { id: "enquiries", label: "Enquiries", icon: Inbox, perm: "enquiries.view" },
       { id: "telemetry", label: "Telemetry", icon: Activity, perm: "telemetry.view" },
     ],
@@ -125,6 +132,7 @@ export const TAB_LABEL: Record<TabId, string> = {
   overview: "Overview",
   pipeline: "Pipeline",
   leads: "Leads",
+  hot: "Hot Leads",
   enquiries: "Enquiries",
   sales: "Sales",
   closed: "Closed deals",

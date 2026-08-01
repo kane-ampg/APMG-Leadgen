@@ -24,6 +24,10 @@ export const PERMISSIONS = {
   "settings.view": "View settings",
   "settings.manage": "Change settings",
   "leads.view": "View leads",
+  // Admin staging surface: high-intent leads are reviewed here BEFORE they're
+  // handed to Sales, so reps deliberately don't get it (they see the result).
+  "hotleads.view": "View hot leads awaiting hand-off to Sales",
+  "hotleads.handoff": "Hand a hot lead over to the Sales queue",
   "leads.export": "Export leads",
   "leads.contact": "Contact a lead (call / email / mark contacted)",
   "leads.close": "Close a lead (won / lost)",

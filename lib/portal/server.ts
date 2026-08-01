@@ -87,6 +87,10 @@ export interface LeadActivityCounts {
   portalViews: number;
   serviceOpens: number;
   inquiries: number;
+  /** questions asked of the portal assistant — one per `chat_prompt` ledger
+   *  row (lib/portal/chatQuota). Content-free: the ledger stores the message
+   *  LENGTH only, so this measures research effort, never what was typed. */
+  chatPrompts: number;
 }
 
 /** Everything one attributed lead (someone who clicked the tracked outreach
@@ -130,6 +134,40 @@ export interface LeadActivityResponse {
   leads: LeadActivity[];
   anonymous: AnonymousPortalActivity;
 }
+
+/**
+ * The customer-journey contract names — the ONLY `portal_events` rows that may
+ * enter an attributed lead's trail.
+ *
+ * Attributed rows are not customer-side by construction: the /t/[id] redirect
+ * sets the long-lived apmg_ref cookie on THIS origin, so an operator who
+ * test-clicks a tracked outreach link stamps that lead's uuid onto every
+ * dashboard click they make from then on. Anything outside this list is internal
+ * click noise, not lead activity.
+ *
+ * Shared by both readers — /api/portal/lead-activity (every lead, for Telemetry
+ * and Hot Leads) and /api/portal/lead-summary (one lead, for the Enquiries
+ * modal + its AI summary) — so the two can never drift into telling different
+ * stories about the same lead. `portal_inquiry_submit` is deliberately absent:
+ * it's the client-side duplicate of the server-canonical `portal_inquiry`, and
+ * one submission must read as one event.
+ */
+export const CUSTOMER_JOURNEY_EVENTS = [
+  "attribution_click",
+  "portal_view",
+  "portal_service_open",
+  "portal_inquiry",
+  // Consent trail: `legal_ack` = the page-entry gate ack (client-emitted,
+  // portal-only); `portal_consent_accept` = the validated enquiry-form consent
+  // (server-emitted, reserved name).
+  "legal_ack",
+  "portal_consent_accept",
+  // Portal-assistant questions (lib/portal/chatQuota's durable quota ledger,
+  // server-emitted + reserved). Content-free by design — the ledger stores the
+  // message LENGTH only, so a trail gains "they were researching before they
+  // enquired" and never any of what they typed.
+  "chat_prompt",
+] as const;
 
 /** Header the admin Enquiries tab sends its access key in. */
 export const PORTAL_ADMIN_KEY_HEADER = "x-portal-admin-key";

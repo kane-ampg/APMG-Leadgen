@@ -36,7 +36,20 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <head>
-        {/* Apply persisted/default-dark theme before paint to avoid a flash. */}
+        {/*
+          Apply the persisted (or default-dark) theme BEFORE first paint, so the
+          page never flashes the wrong one.
+
+          This must stay a BARE inline <script>: the browser runs it while
+          parsing <head>, which is the only thing early enough. next/script with
+          strategy="beforeInteractive" looks like the right tool but isn't — it
+          emits `self.__next_s.push(...)`, deferring the code to Next's runtime,
+          which boots after the first paint. That trades a dev-only console
+          warning ("scripts inside React components are never executed when
+          rendering on the client" — true, and irrelevant here: this one runs
+          from the SSR'd HTML, and only needs to run once) for a real,
+          user-visible flash of the wrong theme. Not a good trade.
+        */}
         <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>
       <body className="font-sans antialiased">{children}</body>

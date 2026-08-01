@@ -4,10 +4,15 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import {
   AlertTriangle,
   Check,
+  CheckCircle2,
+  ChevronDown,
+  Clock,
   Copy,
+  Eye,
   Inbox,
   LayoutGrid,
   MousePointerClick,
+  PhoneCall,
   RefreshCw,
   Trash2,
   Users,
@@ -20,12 +25,18 @@ import {
   DIRECT_CATEGORY,
   INQUIRY_STATUSES,
   isInquiryStatus,
+  salesCanSeeEnquiry,
   serviceLabel,
   sourceLabel,
   type InquiryStatus,
   type PortalInquiry,
   type PortalSummary,
 } from "@/lib/data/enquiries";
+import {
+  DEMO_LEAD_ACTIVITY,
+  type LeadActivity,
+  type LeadActivityEvent,
+} from "@/lib/data/leadActivity";
 import { DIRECT_SOURCE } from "@/lib/portal/source";
 import { formatInt } from "@/lib/format";
 import { adminHeaders, saveAdminKey } from "@/lib/portal/adminKey";
@@ -41,15 +52,18 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { EnquiryActivityModal } from "./EnquiryActivityModal";
 import { Footer } from "./Footer";
 import { Reveal } from "./Reveal";
+import { useSales } from "./SalesProvider";
 
 /**
  * Admin Enquiries tab — the analysis surface for the client-facing services
- * portal. Reads the two portal-telemetry endpoints on mount:
+ * portal. Reads three portal-telemetry endpoints on mount:
  *
- *   GET /api/portal/summary    → funnel totals + per-service / per-sector rollups
- *   GET /api/portal/inquiries  → the enquiry list (email = the qualifying field)
+ *   GET /api/portal/summary       → funnel totals + per-service / per-sector rollups
+ *   GET /api/portal/inquiries     → the enquiry list (email = the qualifying field)
+ *   GET /api/portal/lead-activity → each enquirer's click trail, for the modal
  *
  * The funnel it renders: outreach email click (`attribution_click`) → portal
  * visit (`portal_view`) → service card open (`portal_service_open`) → enquiry
@@ -57,12 +71,27 @@ import { Reveal } from "./Reveal";
  * lead's business + CSV category, so admin can see WHICH sectors respond and
  * WHAT services they actually want — the whole point of the portal experiment.
  *
+ * EVERY ROW HAS A "VIEW". It opens EnquiryActivityModal — the tallies of what
+ * that enquirer did before enquiring (email clicks, info-pack downloads, portal
+ * visits, service cards, chat questions), the fact-only talking points a rep can
+ * open the call with, the enquiry itself, the full chronological trail, and an
+ * on-demand AI summary (POST /api/portal/lead-summary). The trail read is
+ * deliberately secondary: if it fails, the modal says so and the enquiry list is
+ * untouched.
+ *
  * Status changes (new → contacted → closed) PATCH /api/portal/inquiries
  * optimistically and are gated on `enquiries.manage` (sales + admin), as is
  * the per-row delete (DELETE /api/portal/inquiries?id= — for clearing operator
  * test submissions and spam, behind an inline destructive confirm).
  * `mode:"demo"` (no Supabase) swaps in the believable Melbourne dataset from
  * lib/data/enquiries.ts behind an amber banner — the tab never crashes.
+ *
+ * SALES REPS SEE A NARROWER TAB. The funnel gauges and the three analysis
+ * panels are admin instruments — they measure the whole portal experiment, not
+ * a rep's desk — so a rep gets neither. Their enquiry list is scoped to the
+ * leads admin handed them, plus the genuine inbound enquirers
+ * (`salesCanSeeEnquiry`), and their gauges are counted off that scoped list.
+ * Same endpoints, same rows, just the desk's share of them.
  */
 
 /* ───────────────────────────  load state  ─────────────────────────── */
@@ -84,6 +113,69 @@ interface InquiriesResponse {
   mode?: string;
   inquiries?: PortalInquiry[];
   error?: string;
+}
+
+/* ─────────────────  per-enquirer click trails (the View modal)  ───────────────── */
+
+/**
+ * The third read this tab makes: GET /api/portal/lead-activity, keyed by
+ * lead_id, so a row's "View" can show what that enquirer actually did before
+ * they enquired (email click → info pack → portal visits → service cards →
+ * chat → enquiry). Same shared secret as the enquiry listing.
+ *
+ * SECONDARY BY DESIGN: a trail is context, not the record. If this read fails
+ * (or the key only covers the listing) the tab is unaffected and the modal says
+ * the trail is unavailable — it never blocks or errors the enquiry list.
+ */
+type ActivityState = {
+  status: "loading" | "ready" | "unavailable";
+  byLead: ReadonlyMap<string, LeadActivity>;
+};
+
+const NO_ACTIVITY: ActivityState = { status: "loading", byLead: new Map() };
+
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+
+/** Rebuild one trail field-by-field so a partial payload can never leave an
+ *  undefined array behind (the modal maps over `events`). Mirrors the
+ *  normalisers in TelemetryPage / lib/data/hotLeads. */
+function toLead(v: unknown): LeadActivity | null {
+  const o = (v ?? {}) as Partial<LeadActivity>;
+  if (typeof o.leadId !== "string" || !o.leadId) return null;
+  const events: LeadActivityEvent[] = (Array.isArray(o.events) ? o.events : [])
+    .filter((e): e is LeadActivityEvent => {
+      const ev = (e ?? {}) as Partial<LeadActivityEvent>;
+      return typeof ev.event === "string" && typeof ev.ts === "string";
+    })
+    .map((e) => ({
+      event: e.event,
+      service: str(e.service),
+      destination: str(e.destination),
+      version: str(e.version),
+      ts: e.ts,
+    }));
+  const c = (o.counts ?? {}) as Partial<LeadActivity["counts"]>;
+  return {
+    leadId: o.leadId,
+    business: str(o.business),
+    category: str(o.category),
+    campaign: str(o.campaign),
+    firstSeen: str(o.firstSeen) ?? events[0]?.ts ?? "",
+    lastSeen: str(o.lastSeen) ?? events[events.length - 1]?.ts ?? "",
+    events,
+    counts: {
+      emailClicks: num(c.emailClicks),
+      portalViews: num(c.portalViews),
+      serviceOpens: num(c.serviceOpens),
+      inquiries: num(c.inquiries),
+      chatPrompts: num(c.chatPrompts),
+    },
+  };
+}
+
+function indexTrails(leads: LeadActivity[]): Map<string, LeadActivity> {
+  return new Map(leads.map((l) => [l.leadId, l]));
 }
 
 /** Immutable single-row status patch, shared by optimistic apply AND revert. */
@@ -517,26 +609,55 @@ function StatusControl({
 }) {
   if (!canManage) return <StatusPill status={inquiry.status} />;
   return (
-    <select
-      value={inquiry.status}
-      onChange={(e) => {
-        if (isInquiryStatus(e.target.value)) onChange(e.target.value);
-      }}
-      /* NO data-track here: the delegated listener fires on CLICKS, which
-         would count dropdown opens as "changes" and miss keyboard changes.
-         The real event is tracked inside changeStatus, next to the PATCH. */
-      aria-label={`Status of enquiry from ${inquiry.name ?? inquiry.email}`}
-      className={cn(
-        "h-7 cursor-pointer rounded-md border bg-background px-1.5 font-mono text-[10.5px] font-semibold uppercase tracking-[0.08em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        STATUS_META[inquiry.status].select,
-      )}
+    /* The status colour lives on the wrapper so the caret can inherit it with
+       `text-current` — the pill reads as one object in every state. Border
+       classes on a border-less span are inert, so the same token string can
+       dress both halves. */
+    <span className={cn("relative inline-flex items-center", STATUS_META[inquiry.status].select)}>
+      <select
+        value={inquiry.status}
+        onChange={(e) => {
+          if (isInquiryStatus(e.target.value)) onChange(e.target.value);
+        }}
+        /* NO data-track here: the delegated listener fires on CLICKS, which
+           would count dropdown opens as "changes" and miss keyboard changes.
+           The real event is tracked inside changeStatus, next to the PATCH. */
+        aria-label={`Status of enquiry from ${inquiry.name ?? inquiry.email}`}
+        className={cn(
+          "h-7 cursor-pointer appearance-none rounded-md border bg-background pl-2 pr-6 font-mono text-[10.5px] font-semibold uppercase tracking-[0.08em] text-current transition-colors duration-200 hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+          STATUS_META[inquiry.status].select,
+        )}
+      >
+        {INQUIRY_STATUSES.map((s) => (
+          <option key={s} value={s}>
+            {STATUS_META[s].label}
+          </option>
+        ))}
+      </select>
+      <ChevronDown
+        className="pointer-events-none absolute right-1.5 h-3 w-3 text-current opacity-60"
+        aria-hidden
+      />
+    </span>
+  );
+}
+
+/** Opens the activity modal for one enquiry — what they did before enquiring,
+ *  the talking points, and the on-demand AI summary. Every role gets this: it's
+ *  a read, and it's the whole point of the tab for a rep about to ring them. */
+function ViewButton({ inquiry, onClick }: { inquiry: PortalInquiry; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-track="enquiries_view"
+      data-track-service={inquiry.serviceSlug}
+      aria-label={`View portal activity for ${inquiry.business ?? inquiry.name ?? inquiry.email}`}
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground outline-none transition-colors hover:border-primary/40 hover:text-foreground focus-visible:border-primary/40 focus-visible:shadow-[inset_0_0_0_2px_hsl(var(--ring))]"
     >
-      {INQUIRY_STATUSES.map((s) => (
-        <option key={s} value={s}>
-          {STATUS_META[s].label}
-        </option>
-      ))}
-    </select>
+      <Eye className="h-3.5 w-3.5" aria-hidden />
+      View
+    </button>
   );
 }
 
@@ -762,12 +883,67 @@ function Message({
   );
 }
 
+/**
+ * The rep's four gauges: how much inbound is on their desk and how far through
+ * triage it is. Counted off the SCOPED list, so every number here describes
+ * enquiries from the leads admin handed them (plus genuine direct enquirers) —
+ * never portal-wide traffic.
+ */
+function salesTriageStats(rows: PortalInquiry[]): EnquiryStat[] {
+  const total = rows.length;
+  const by = (s: InquiryStatus) => rows.filter((q) => q.status === s).length;
+  const isNew = by("new");
+  const contacted = by("contacted");
+  const closed = by("closed");
+  const ofYours = "of your enquiries";
+  return [
+    {
+      id: "yours",
+      label: "Your enquiries",
+      value: total,
+      icon: Inbox,
+      caption: "from your leads + direct",
+      ratio: { value: ratio(isNew, total), label: "awaiting first contact" },
+    },
+    {
+      id: "awaiting",
+      label: "Awaiting contact",
+      value: isNew,
+      icon: Clock,
+      caption: "not actioned yet",
+      ratio: { value: ratio(isNew, total), label: ofYours },
+    },
+    {
+      id: "contacted",
+      label: "Contacted",
+      value: contacted,
+      icon: PhoneCall,
+      caption: "reply sent",
+      ratio: { value: ratio(contacted, total), label: ofYours },
+    },
+    {
+      id: "closed",
+      label: "Closed",
+      value: closed,
+      icon: CheckCircle2,
+      caption: "wrapped up",
+      ratio: { value: ratio(closed, total), label: ofYours },
+    },
+  ];
+}
+
 /* ───────────────────────────  page  ─────────────────────────── */
 
 export function EnquiriesPage() {
-  const { can } = useRbac();
+  const { can, role } = useRbac();
   const canManage = can("enquiries.manage");
+  // A rep's tab is scoped to what admin sent them (see the file header).
+  const isSales = role === "sales";
+  const { queuedIds } = useSales();
   const [load, setLoad] = useState<LoadState>({ status: "loading" });
+  const [activity, setActivity] = useState<ActivityState>(NO_ACTIVITY);
+  /** id of the enquiry whose activity modal is open (null = closed). */
+  const [viewing, setViewing] = useState<string | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   /** Access-key field shown when the enquiries API answers 401. */
@@ -781,8 +957,44 @@ export function EnquiriesPage() {
     };
   }, []);
 
+  /**
+   * The click trails behind each row's "View". Read alongside the enquiries but
+   * kept in its OWN state on purpose: it's context, so a failure here must
+   * degrade the modal, never the tab. Resolves to "unavailable" rather than
+   * throwing, and the enquiry list never waits on it.
+   */
+  const fetchActivity = useCallback(async () => {
+    try {
+      const res = await fetch("/api/portal/lead-activity", {
+        cache: "no-store",
+        headers: adminHeaders(),
+      });
+      const data = (await res.json().catch(() => null)) as
+        | { ok?: boolean; mode?: string; leads?: unknown }
+        | null;
+      if (!mountedRef.current) return;
+      // Demo mode scores the same Melbourne preset the Telemetry tab shows, so
+      // the demo enquiries have believable trails behind them too.
+      if (data?.mode === "demo") {
+        setActivity({ status: "ready", byLead: indexTrails(DEMO_LEAD_ACTIVITY) });
+        return;
+      }
+      if (!res.ok || !data?.ok) {
+        setActivity({ status: "unavailable", byLead: new Map() });
+        return;
+      }
+      const leads = (Array.isArray(data.leads) ? data.leads : [])
+        .map(toLead)
+        .filter((l): l is LeadActivity => l !== null);
+      setActivity({ status: "ready", byLead: indexTrails(leads) });
+    } catch {
+      if (mountedRef.current) setActivity({ status: "unavailable", byLead: new Map() });
+    }
+  }, []);
+
   const fetchAll = useCallback(async (opts?: { quiet?: boolean }) => {
     if (!opts?.quiet) setLoad((prev) => (prev.status === "ready" ? prev : { status: "loading" }));
+    void fetchActivity();
     try {
       const [sumRes, inqRes] = await Promise.all([
         fetch("/api/portal/summary", { cache: "no-store" }),
@@ -843,7 +1055,7 @@ export function EnquiriesPage() {
         setLoad({ status: "error", error: "Network error loading portal enquiries." });
       }
     }
-  }, []);
+  }, [fetchActivity]);
 
   useEffect(() => {
     fetchAll();
@@ -962,11 +1174,39 @@ export function EnquiriesPage() {
 
   const ready = load.status === "ready" ? load : null;
   const summary = ready?.summary ?? null;
-  const inquiries = ready?.inquiries ?? [];
+  const allInquiries = ready?.inquiries ?? [];
+  // A rep sees their share; admin sees the list whole. The demo preset is left
+  // alone either way — its lead ids are fabricated, so scoping it against a real
+  // hand-off roll would just empty the tab out.
+  const inquiries = useMemo(
+    () =>
+      isSales && ready?.mode === "live"
+        ? allInquiries.filter((q) => salesCanSeeEnquiry(q, queuedIds))
+        : allInquiries,
+    [isSales, ready?.mode, allInquiries, queuedIds],
+  );
   const awaiting = inquiries.filter((q) => q.status === "new").length;
 
-  // Funnel gauges, one per stage: click → visit → browse → enquire.
+  // The open modal's row, resolved from the SCOPED list — a rep can only open
+  // what they can see, and a row that vanished under them (deleted, or scoped
+  // away by a hand-off change) closes the modal instead of stranding it.
+  const viewed = useMemo(
+    () => (viewing ? inquiries.find((q) => q.id === viewing) ?? null : null),
+    [viewing, inquiries],
+  );
+  useEffect(() => {
+    if (viewing && !viewed) setViewing(null);
+  }, [viewing, viewed]);
+  // Trails are keyed by lead_id, so a direct/social enquirer resolves to null —
+  // which the modal renders as "no tracked trail", not as an error.
+  const viewedActivity =
+    viewed?.leadId ? activity.byLead.get(viewed.leadId) ?? null : null;
+
+  // Funnel gauges, one per stage: click → visit → browse → enquire. Reps get
+  // triage tallies off their own scoped list instead — the funnel measures the
+  // whole portal experiment, which isn't their surface.
   const stats = useMemo<EnquiryStat[]>(() => {
+    if (isSales) return salesTriageStats(inquiries);
     if (!summary) return [];
     const t = summary.totals;
     return [
@@ -1003,9 +1243,14 @@ export function EnquiriesPage() {
         ratio: { value: ratio(awaiting, inquiries.length), label: "awaiting first contact" },
       },
     ];
-  }, [summary, awaiting, inquiries.length]);
+  }, [isSales, summary, awaiting, inquiries]);
 
-  const lastActivity = summary?.recentEvents[0]?.createdAt ?? inquiries[0]?.createdAt ?? null;
+  // Reps track their own list, not portal-wide event traffic.
+  const lastActivity = isSales
+    ? inquiries[0]?.createdAt ?? null
+    : summary?.recentEvents[0]?.createdAt ?? inquiries[0]?.createdAt ?? null;
+  // Sales gauges only need the scoped list; admin's need the summary rollup.
+  const gaugesReady = isSales ? !!ready : !!summary;
 
   return (
     <div className="flex min-h-full flex-col px-4 py-5 sm:px-6">
@@ -1014,13 +1259,15 @@ export function EnquiriesPage() {
         <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2">
           <div>
             <div className="font-mono text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-              Client portal — what they want
+              {isSales ? "Your desk — inbound" : "Client portal — what they want"}
             </div>
             <h1 className="mt-1.5 text-xl font-semibold tracking-tight text-foreground sm:text-2xl">
               Enquiries
             </h1>
             <p className="mt-1 text-xs text-muted-foreground">
-              Every portal enquiry, matched back to the outreach lead that clicked.
+              {isSales
+                ? "Portal enquiries from the leads admin handed you, plus anyone who enquired directly."
+                : "Every portal enquiry, matched back to the outreach lead that clicked."}
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -1124,9 +1371,9 @@ export function EnquiriesPage() {
         </Reveal>
       ) : (
         <>
-          {/* ── 2 · funnel KPIs, fused instrument panel (OverviewPage) ──── */}
+          {/* ── 2 · gauges, fused instrument panel (OverviewPage) ────────── */}
           <Reveal delay={0.04}>
-            {summary ? (
+            {gaugesReady ? (
               <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-border ring-1 ring-foreground/10 lg:grid-cols-4">
                 {stats.map((stat) => (
                   <StatCard key={stat.id} stat={stat} />
@@ -1137,38 +1384,42 @@ export function EnquiriesPage() {
             )}
           </Reveal>
 
-          {/* ── 3 · two-column analysis ─────────────────────────────────── */}
-          <div className="mt-3 grid grid-cols-1 items-stretch gap-3 lg:grid-cols-2">
-            <Reveal delay={0.1} className="h-full">
-              {summary ? (
-                <ServiceBars rows={summary.byService} />
-              ) : (
-                <AnalysisSkeleton title="Services they want" />
-              )}
-            </Reveal>
-            <Reveal delay={0.14} className="h-full">
-              {summary ? (
-                <SectorList rows={summary.byCategory} />
-              ) : (
-                <AnalysisSkeleton title="Sectors they came from" />
-              )}
-            </Reveal>
-          </div>
+          {/* ── 3 · two-column analysis (admin only — portal-wide rollups) ── */}
+          {!isSales && (
+            <>
+              <div className="mt-3 grid grid-cols-1 items-stretch gap-3 lg:grid-cols-2">
+                <Reveal delay={0.1} className="h-full">
+                  {summary ? (
+                    <ServiceBars rows={summary.byService} />
+                  ) : (
+                    <AnalysisSkeleton title="Services they want" />
+                  )}
+                </Reveal>
+                <Reveal delay={0.14} className="h-full">
+                  {summary ? (
+                    <SectorList rows={summary.byCategory} />
+                  ) : (
+                    <AnalysisSkeleton title="Sectors they came from" />
+                  )}
+                </Reveal>
+              </div>
 
-          {/* ── 3b · traffic sources (the social-promotion readout) ──────── */}
-          <Reveal delay={0.16} className="mt-3">
-            {summary ? (
-              <SourceList rows={summary.bySource} />
-            ) : (
-              <AnalysisSkeleton title="Where they came from" />
-            )}
-          </Reveal>
+              {/* ── 3b · traffic sources (the social-promotion readout) ──── */}
+              <Reveal delay={0.16} className="mt-3">
+                {summary ? (
+                  <SourceList rows={summary.bySource} />
+                ) : (
+                  <AnalysisSkeleton title="Where they came from" />
+                )}
+              </Reveal>
+            </>
+          )}
 
           {/* ── 4 · the enquiries themselves ────────────────────────────── */}
           <Reveal delay={0.18} className="mt-3">
             <section className="min-w-0 rounded-xl bg-card ring-1 ring-foreground/10">
               <PanelHead
-                title="Enquiries"
+                title={isSales ? "Your enquiries" : "Enquiries"}
                 meta={
                   <span className="tnum font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                     {ready ? `${inquiries.length} total · ${awaiting} new` : "loading"}
@@ -1192,7 +1443,13 @@ export function EnquiriesPage() {
                   ))}
                 </div>
               ) : inquiries.length === 0 ? (
-                <PanelEmpty hint="No enquiries yet — they'll appear the moment a portal visitor submits the enquiry form." />
+                <PanelEmpty
+                  hint={
+                    isSales
+                      ? "Nothing inbound yet — enquiries land here when one of the leads admin handed you submits the portal form."
+                      : "No enquiries yet — they'll appear the moment a portal visitor submits the enquiry form."
+                  }
+                />
               ) : (
                 <>
                   {/* desktop table (LeadsTable grammar) */}
@@ -1206,6 +1463,9 @@ export function EnquiriesPage() {
                           <TableHead>Sector / attribution</TableHead>
                           <TableHead>Message</TableHead>
                           <TableHead className="text-right">Status</TableHead>
+                          <TableHead className="w-16 text-right">
+                            <span className="sr-only">Activity</span>
+                          </TableHead>
                           {canManage && (
                             <TableHead className="w-9">
                               <span className="sr-only">Delete</span>
@@ -1251,6 +1511,9 @@ export function EnquiriesPage() {
                                 onChange={(next) => changeStatus(q, next)}
                               />
                             </TableCell>
+                            <TableCell className="py-3 text-right align-top">
+                              <ViewButton inquiry={q} onClick={() => setViewing(q.id)} />
+                            </TableCell>
                             {canManage && (
                               <TableCell className="py-3 text-right align-top">
                                 <DeleteButton
@@ -1263,7 +1526,9 @@ export function EnquiriesPage() {
                           </TableRow>
                           {deleting?.id === q.id && (
                             <TableRow className="hover:bg-transparent">
-                              <TableCell colSpan={7} className="p-0">
+                              {/* spans every column, so the confirm strip reads
+                                  as one bar under the row it belongs to */}
+                              <TableCell colSpan={canManage ? 8 : 7} className="p-0">
                                 <DeleteConfirm
                                   inquiry={q}
                                   busy={deleting.phase === "busy"}
@@ -1317,6 +1582,9 @@ export function EnquiriesPage() {
                           >
                             {fmtWhen(q.createdAt)}
                           </span>
+                          <span className="ml-auto">
+                            <ViewButton inquiry={q} onClick={() => setViewing(q.id)} />
+                          </span>
                         </div>
 
                         <div className="mt-2">
@@ -1351,6 +1619,15 @@ export function EnquiriesPage() {
           </Reveal>
         </>
       )}
+
+      {/* ── 6 · one enquirer's activity, on demand ─────────────────────── */}
+      <EnquiryActivityModal
+        inquiry={viewed}
+        activity={viewedActivity}
+        activityState={activity.status}
+        demo={ready?.mode === "demo"}
+        onClose={() => setViewing(null)}
+      />
 
       <Footer />
     </div>

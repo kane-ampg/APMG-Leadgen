@@ -16,8 +16,10 @@ import { EnquiriesPage } from "./EnquiriesPage";
 import { IntegrationsPage } from "./IntegrationsPage";
 import { MobileHeader } from "./MobileHeader";
 import { OverviewPage } from "./OverviewPage";
+import { HotLeadsPage } from "./HotLeadsPage";
 import { LeadsPage } from "./LeadsPage";
 import { PipelinePage } from "./PipelinePage";
+import { SalesArrivalsModal } from "./SalesArrivalsModal";
 import { SalesPage } from "./SalesPage";
 import { SectorPlaybooksPage } from "./SectorPlaybooksPage";
 import { ServicesPortal } from "./ServicesPortal";
@@ -121,11 +123,13 @@ export function DashboardShell({ user }: { user?: AppUser }) {
                 {activeTab === "services" ? (
                   <ServicesPortal />
                 ) : activeTab === "overview" ? (
-                  <OverviewPage />
+                  <OverviewPage user={user} />
                 ) : activeTab === "pipeline" ? (
                   <PipelinePage />
                 ) : activeTab === "leads" ? (
                   <LeadsPage />
+                ) : activeTab === "hot" ? (
+                  <HotLeadsPage />
                 ) : activeTab === "enquiries" ? (
                   <EnquiriesPage />
                 ) : activeTab === "sales" ? (
@@ -150,6 +154,18 @@ export function DashboardShell({ user }: { user?: AppUser }) {
           </div>
         </div>
       </main>
+
+      {/* Shell-level so new work from admin announces itself on ANY surface —
+          from Overview, Enquiries, wherever. Suppressed on the Sales tab, where
+          the queue's own banner already says it and a modal would cover the
+          list it points at. Gated on sales.view: a role that can't open the
+          queue has no use for "3 new leads landed". */}
+      {can("sales.view") && (
+        <SalesArrivalsModal
+          suppressed={activeTab === "sales"}
+          onOpenSales={() => navigate("sales")}
+        />
+      )}
 
       <TelemetryInspector open={inspectorOpen} onClose={() => setInspectorOpen(false)} />
       <ClickPing />

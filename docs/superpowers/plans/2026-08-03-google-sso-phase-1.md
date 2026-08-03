@@ -391,6 +391,15 @@ describe("isSafeNextPath", () => {
     expect(isSafeNextPath("/\\evil.example")).toBe(false);
   });
 
+  it("rejects control characters a URL parser would strip", () => {
+    // Every browser and Node strip TAB/CR/LF from anywhere in the string
+    // BEFORE reading its structure, so these parse as //evil.example.
+    expect(isSafeNextPath("/\t/evil.example")).toBe(false);
+    expect(isSafeNextPath("/\n/evil.example")).toBe(false);
+    expect(isSafeNextPath("/\r/evil.example")).toBe(false);
+    expect(isSafeNextPath("/\t\\evil.example")).toBe(false);
+  });
+
   it("rejects empty and missing values", () => {
     expect(isSafeNextPath("")).toBe(false);
     expect(isSafeNextPath(null)).toBe(false);
@@ -489,6 +498,14 @@ export function denyRoleChange(args: {
  */
 export function isSafeNextPath(next: string | null | undefined): boolean {
   if (!next) return false;
+  // Reject control characters outright instead of trying to emulate them.
+  // WHATWG URL parsers — every browser, and Node's URL — strip TAB, CR and LF
+  // from ANYWHERE in a string before reading its structure. So "/\t/evil.host"
+  // survives a naive leading-"//" check and then parses as //evil.host, which
+  // is a working open redirect off the back of a genuine sign-in. Refusing the
+  // whole character class is safer than matching each parser's strip-list,
+  // because a quirk we failed to anticipate cannot reopen the hole.
+  if (/[\u0000-\u001f\u007f]/.test(next)) return false;
   if (!next.startsWith("/")) return false;
   // "//host" is protocol-relative; "/\host" is normalised to it by some browsers.
   if (next.startsWith("//") || next.startsWith("/\\")) return false;

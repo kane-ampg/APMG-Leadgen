@@ -524,9 +524,11 @@ and an open-redirect guard for the post-login next path."
 - Produces:
   - `getUserRole(email: string): Promise<Role>`
   - `upsertOnLogin(u: { email: string; name?: string; picture?: string }): Promise<Role>`
-  - `listUsers(): Promise<AppUserRow[]>`
-  - `setUserRole(email: string, role: Role): Promise<"ok" | "demo" | "error">`
-  - `interface AppUserRow { email: string; name: string | null; picture_url: string | null; role: Role; created_at: string; last_login_at: string | null }`
+
+> **Scope:** ship only these two. `listUsers()` and `setUserRole()` belong to the
+> Phase 2 admin tab and have no caller in Phase 1 — adding them here would mean
+> shipping exported, untested, uncalled code. They go in with the UI that uses
+> them.
 
 - [ ] **Step 1: Write the migration**
 
@@ -588,15 +590,6 @@ import { isRole, type Role } from "@/lib/rbac/roles";
  */
 
 const TABLE = "app_users";
-
-export interface AppUserRow {
-  email: string;
-  name: string | null;
-  picture_url: string | null;
-  role: Role;
-  created_at: string;
-  last_login_at: string | null;
-}
 
 function authHeaders(key: string): Record<string, string> {
   return { apikey: key, Authorization: `Bearer ${key}` };
@@ -666,50 +659,6 @@ export async function upsertOnLogin(u: {
     console.error("[auth] app_users upsert failed:", e);
   }
   return existing;
-}
-
-/** Every console user, newest sign-in first. Used by the Phase 2 admin tab. */
-export async function listUsers(): Promise<AppUserRow[]> {
-  const target = supabaseTarget();
-  if (target.state !== "ok") return [];
-  try {
-    const res = await fetch(
-      `${target.base}/rest/v1/${TABLE}?select=email,name,picture_url,role,created_at,last_login_at&order=last_login_at.desc.nullslast`,
-      { headers: authHeaders(target.key), cache: "no-store" },
-    );
-    if (!res.ok) return [];
-    const rows = (await res.json().catch(() => [])) as AppUserRow[];
-    return Array.isArray(rows) ? rows.filter((r) => isRole(r.role)) : [];
-  } catch {
-    return [];
-  }
-}
-
-/** Change one user's role. Callers MUST have run denyRoleChange first. */
-export async function setUserRole(
-  email: string,
-  role: Role,
-): Promise<"ok" | "demo" | "error"> {
-  const target = supabaseTarget();
-  if (target.state !== "ok") return "demo";
-  try {
-    const res = await fetch(
-      `${target.base}/rest/v1/${TABLE}?email=eq.${encodeURIComponent(email.trim().toLowerCase())}`,
-      {
-        method: "PATCH",
-        headers: {
-          ...authHeaders(target.key),
-          "Content-Type": "application/json",
-          Prefer: "return=minimal",
-        },
-        body: JSON.stringify({ role }),
-      },
-    );
-    return res.ok ? "ok" : "error";
-  } catch (e) {
-    console.error("[auth] app_users role update failed:", e);
-    return "error";
-  }
 }
 ```
 
@@ -1547,15 +1496,25 @@ lead database, and that passes when the Origin header is absent."
 
 ---
 
-### Task 9: Login page — Google as the only door
+### Task 9: Google-only login and the session-aware shell
+
+> **Why these are one task:** deleting `lib/auth/users.ts` breaks every file that
+> imported `AppUser` (`app/page.tsx`, `components/apmg/Sidebar.tsx`). Splitting
+> the deletion from the repair would leave a task boundary — and a commit — where
+> the build does not compile. Do the whole swap in one reviewable unit.
 
 **Files:**
 - Modify: `app/login/page.tsx:171-328`
 - Delete: `lib/auth/users.ts`
+- Create: `components/apmg/PendingAccess.tsx`
+- Modify: `app/page.tsx`
+- Modify: `app/layout.tsx`
+- Modify: `components/apmg/Sidebar.tsx:17-18,31-32,286-328`
+- Modify: `components/apmg/DashboardShell.tsx` (user prop type only)
 
 **Interfaces:**
-- Consumes: `/api/auth/google/start` (Task 5)
-- Produces: a login page with no password path; `AppUser` type no longer exists
+- Consumes: `/api/auth/google/start` (Task 5); `resolveSession` (Task 6); `THEME_SEED_COOKIE` (Task 4); `themeBootstrap` from `lib/theme.ts`
+- Produces: a login page with no password path; `AppUser` no longer exists, replaced by `SessionUser` (`{ email: string; name: string; initials: string }`) exported from `components/apmg/Sidebar.tsx` and consumed by `DashboardShell`
 
 - [ ] **Step 1: Delete the credential directory**
 
@@ -1643,37 +1602,12 @@ const LOGIN_ERRORS: Record<string, string> = {
 
 Because the rewritten page no longer renders a `<Button>`, remove the now-unused `import { Button } from "@/components/ui/button";` too.
 
-- [ ] **Step 3: Typecheck and build**
+At this point the build is intentionally broken — `app/page.tsx` and
+`components/apmg/Sidebar.tsx` still import the deleted `AppUser`. Do **not**
+commit here; the remaining steps repair it, and the single commit lands at the
+end.
 
-Run: `npx tsc --noEmit && npx next build`
-Expected: clean. Errors will point at the other files that imported `AppUser` from the deleted module (`app/page.tsx`, `components/apmg/Sidebar.tsx`) — Task 10 fixes those, so it is fine to complete Task 10 before this build passes.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add app/login/page.tsx lib/auth/users.ts
-git commit -m "Make Google the only sign-in path
-
-Deletes the hardcoded user list and the shared plaintext password,
-which stayed a valid door bypassing SSO entirely. Removes the inert
-Microsoft button rather than leaving a control that never works."
-```
-
----
-
-### Task 10: Session-aware shell — pending screen, sign-out, theme
-
-**Files:**
-- Create: `components/apmg/PendingAccess.tsx`
-- Modify: `app/page.tsx`
-- Modify: `app/layout.tsx`
-- Modify: `components/apmg/Sidebar.tsx:17-18,31-32,286-328`
-
-**Interfaces:**
-- Consumes: `resolveSession` (Task 6); `THEME_SEED_COOKIE` (Task 4); `themeBootstrap` from `lib/theme.ts`
-- Produces: a `SessionUser` shape (`{ email: string; name: string; initials: string }`) passed to `DashboardShell` and `Sidebar` in place of the deleted `AppUser`
-
-- [ ] **Step 1: Create the pending screen**
+- [ ] **Step 3: Create the pending screen**
 
 Create `components/apmg/PendingAccess.tsx`:
 
@@ -1716,7 +1650,7 @@ export function PendingAccess({ email }: { email: string }) {
 }
 ```
 
-- [ ] **Step 2: Wire the session into the page**
+- [ ] **Step 4: Wire the session into the page**
 
 Replace the contents of `app/page.tsx`:
 
@@ -1758,7 +1692,7 @@ export default async function Page() {
 }
 ```
 
-- [ ] **Step 3: Replace the deleted AppUser type**
+- [ ] **Step 5: Replace the deleted AppUser type**
 
 In `components/apmg/Sidebar.tsx`, delete the two imports from the removed modules (lines 17-18):
 
@@ -1779,7 +1713,7 @@ export interface SessionUser {
 
 …and change the prop to `user?: SessionUser`. Update `DashboardShell`'s `user` prop type to match by importing `SessionUser` from `./Sidebar`.
 
-- [ ] **Step 4: Make sign-out server-side**
+- [ ] **Step 6: Make sign-out server-side**
 
 In `components/apmg/Sidebar.tsx`, replace the sign-out button's `onClick` (line 320-323):
 
@@ -1801,7 +1735,7 @@ Also remove the hardcoded `?? "KR"` / `?? "Kane Reroma"` / `?? "kane@apmgservice
 {user?.email ?? ""}
 ```
 
-- [ ] **Step 5: Seed the theme from the cookie**
+- [ ] **Step 7: Seed the theme from the cookie**
 
 `app/layout.tsx` currently imports `THEME_BOOTSTRAP` (line 3), is a **synchronous** component (line 27), and hardcodes `dark` in the `<html>` className (line 35). All three change.
 
@@ -1839,12 +1773,12 @@ And use the seeded bootstrap in the inline script, leaving the long comment abov
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap(seed) }} />
 ```
 
-- [ ] **Step 6: Typecheck and build**
+- [ ] **Step 8: Typecheck and build**
 
 Run: `npx tsc --noEmit && npx next build`
-Expected: both clean — this is the point at which all the fallout from deleting `lib/auth/users.ts` is resolved.
+Expected: both clean — this is the point at which all the fallout from deleting `lib/auth/users.ts` is resolved. If either fails, the task is not done; fix before committing.
 
-- [ ] **Step 7: Verify end to end**
+- [ ] **Step 9: Verify end to end**
 
 With the dev server running:
 
@@ -1853,20 +1787,29 @@ With the dev server running:
 3. Click Sign out → back at `/login`; visiting `/` redirects again
 4. In Supabase, set another signed-in user's role to `pending` and reload their session → they see the Access pending screen
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
+
+One commit for the whole swap — the tree never compiles without both halves.
 
 ```bash
-git add app/page.tsx app/layout.tsx components/apmg/PendingAccess.tsx components/apmg/Sidebar.tsx components/apmg/DashboardShell.tsx
-git commit -m "Wire the session into the shell
+git add app/login/page.tsx lib/auth/users.ts app/page.tsx app/layout.tsx \
+        components/apmg/PendingAccess.tsx components/apmg/Sidebar.tsx \
+        components/apmg/DashboardShell.tsx
+git commit -m "Make Google the only sign-in path and wire the session in
 
-Adds the pending-access screen, moves sign-out server-side (HttpOnly
-cookies can't be cleared from JS), and seeds the theme from a cookie
-set at callback time so there's no flash."
+Deletes the hardcoded user list and the shared plaintext password,
+which stayed a valid door bypassing SSO entirely, and removes the inert
+Microsoft button rather than leaving a control that never works.
+
+Same commit carries the repair, because deleting AppUser breaks its
+importers: the pending-access screen, server-side sign-out (HttpOnly
+cookies can't be cleared from JS), and theme seeding from a cookie set
+at callback time so there's no flash."
 ```
 
 ---
 
-### Task 11: Playwright regression tests for the gate
+### Task 10: Playwright regression tests for the gate
 
 **Files:**
 - Create: `playwright.config.ts`
@@ -2002,5 +1945,5 @@ test that the customer portal still loads anonymously."
 
 ## Follow-on phases (separate plans)
 
-- **Phase 2 — Roles and Permissions tab.** `SettingsPage` with sub-tabs, the user table, the permission matrix, and `app/api/admin/users/route.ts` applying `denyRoleChange` (already built and tested in Task 2).
+- **Phase 2 — Roles and Permissions tab.** `SettingsPage` with sub-tabs, the user table, the permission matrix, and `app/api/admin/users/route.ts` applying `denyRoleChange` (already built and tested in Task 2). Phase 2 also adds `listUsers()` and `setUserRole()` to `lib/auth/userStore.ts` — deliberately deferred out of Phase 1, which has no caller for them.
 - **Phase 3 — View-as switcher.** `/api/auth/view-as`, `RbacProvider` carrying both `role` and `trueRole`, and the exit banner that must render off the **true** role or an admin gets stranded in a role they can't leave. `effectiveRole` (Task 2) already implements the server side.

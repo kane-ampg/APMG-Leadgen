@@ -3,11 +3,8 @@ import { ALL_PERMISSIONS, type Permission } from "./permissions";
 /**
  * A role is a named bundle of permissions — nothing more. Enforcement checks
  * permissions, so new roles are pure data and need no logic changes.
- *
- * `sales` is defined (so enforcement is ready the day it's switched on) but
- * marked `enabled: false` — it is reserved and not yet assignable.
  */
-export type Role = "admin" | "client" | "sales";
+export type Role = "admin" | "client" | "sales" | "pending";
 
 export interface RoleDef {
   label: string;
@@ -48,10 +45,18 @@ export const ROLES: Record<Role, RoleDef> = {
       "enquiries.manage",
     ],
   },
+  pending: {
+    label: "Pending",
+    description:
+      "Signed in, but no access yet — an admin must grant a role. This is where every auto-admitted Workspace account lands.",
+    enabled: true,
+    permissions: [],
+  },
 };
 
-/** Fallback role when no session is present (internal console default). */
-export const DEFAULT_ROLE: Role = "admin";
+/** Fallback role when no session is present. Deliberately powerless: a code
+ *  path that cannot resolve a role must grant nothing, not everything. */
+export const DEFAULT_ROLE: Role = "pending";
 
 export function isRole(value: unknown): value is Role {
   return typeof value === "string" && value in ROLES;

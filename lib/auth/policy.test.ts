@@ -139,6 +139,15 @@ describe("isSafeNextPath", () => {
     expect(isSafeNextPath("/\\evil.example")).toBe(false);
   });
 
+  it("rejects control characters a URL parser would strip", () => {
+    // Every browser and Node strip TAB/CR/LF from anywhere in the string
+    // BEFORE reading its structure, so these parse as //evil.example.
+    expect(isSafeNextPath("/\t/evil.example")).toBe(false);
+    expect(isSafeNextPath("/\n/evil.example")).toBe(false);
+    expect(isSafeNextPath("/\r/evil.example")).toBe(false);
+    expect(isSafeNextPath("/\t\\evil.example")).toBe(false);
+  });
+
   it("rejects empty and missing values", () => {
     expect(isSafeNextPath("")).toBe(false);
     expect(isSafeNextPath(null)).toBe(false);

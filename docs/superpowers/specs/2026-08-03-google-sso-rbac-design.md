@@ -394,6 +394,13 @@ user is stranded in a role they cannot leave. Therefore:
 The banner is also necessary UX: because enforcement is real, a user who forgets
 they are impersonating will hit legitimate 403s and read them as bugs.
 
+**Button order (addendum, 2026-08-04):** the switcher lists `sales` first among
+the role options — it is the role checked most often when previewing — with
+`client` and `pending` after. This is purely a display-order choice; sign-in is
+unaffected and an admin still lands in their own `admin` view every session.
+Nothing pre-selects or auto-activates a preview role — the switcher starts with
+no role active (`viewAs` is `null`) until the admin clicks one.
+
 ## 10. Login page and Sidebar changes
 
 `app/login/page.tsx`:

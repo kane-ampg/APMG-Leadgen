@@ -38,7 +38,11 @@ const CUSTOMER_HOST_SUFFIX = (process.env.CUSTOMER_PORTAL_HOST_SUFFIX || "")
 /** Path prefixes the customer portal legitimately needs. Anything not matching
  *  is treated as admin-only and blocked on a customer host. */
 const PORTAL_ALLOW = [
-  "/portal",
+  // Trailing slash is load-bearing: a bare "/portal" would also prefix-match
+  // a future admin route like "/portal-admin" and silently exempt it from
+  // both the customer-host wall and the admin auth gate below. The exact
+  // "/portal" page itself is already covered by isPortalPath's own check.
+  "/portal/",
   "/t/", // attribution hook /t/<leadId>
   "/api/portal/", // events, inquiries, summary, lead-activity
 ];

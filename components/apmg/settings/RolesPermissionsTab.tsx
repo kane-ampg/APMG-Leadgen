@@ -72,7 +72,12 @@ export function RolesPermissionsTab({
   onPendingCountChange?: (n: number) => void;
 }) {
   const [load, setLoad] = useState<Load>({ status: "loading" });
-  const [savingEmail, setSavingEmail] = useState<string | null>(null);
+  // A set, not a single email: a scalar "the row that's saving" would
+  // un-disable the FIRST row the instant a SECOND row's change begins (the
+  // scalar moves to the new email), letting an admin double-submit a PATCH
+  // for a user whose first request is still in flight. Each entry tracks one
+  // row's own in-flight save independently.
+  const [saving, setSaving] = useState<ReadonlySet<string>>(new Set());
   const [notice, setNotice] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
   const refresh = useCallback(async () => {
@@ -104,7 +109,15 @@ export function RolesPermissionsTab({
   }, [pendingCount, onPendingCountChange]);
 
   async function changeRole(email: string, role: Role) {
-    setSavingEmail(email);
+    // Functional updates so two overlapping changeRole calls each add/remove
+    // their own email without clobbering the other's entry — reading `saving`
+    // directly here (instead of via the updater) could lose one of two
+    // concurrent adds/removes to a stale closure.
+    setSaving((prev) => {
+      const next = new Set(prev);
+      next.add(email);
+      return next;
+    });
     setNotice(null);
     try {
       const res = await fetch("/api/admin/users", {
@@ -122,7 +135,11 @@ export function RolesPermissionsTab({
     } catch {
       setNotice({ kind: "err", text: "Couldn't reach the server." });
     } finally {
-      setSavingEmail(null);
+      setSaving((prev) => {
+        const next = new Set(prev);
+        next.delete(email);
+        return next;
+      });
     }
   }
 
@@ -223,14 +240,17 @@ export function RolesPermissionsTab({
                   {load.users.map((u) => {
                     const isMain = u.email === load.mainAdminEmail;
                     const isSelf = u.email === load.actorEmail;
-                    const locked = isMain || isSelf || !load.canPersist;
+                    // No `!load.canPersist` branch here: listUsers() returns
+                    // [] whenever Supabase is unconfigured, so canPersist is
+                    // only ever false when this table is empty and this row
+                    // can't exist — the demo-mode banner above already
+                    // explains that state.
+                    const locked = isMain || isSelf;
                     const reason = isMain
                       ? "The protected main admin can't be changed."
                       : isSelf
                         ? "You can't change your own role."
-                        : !load.canPersist
-                          ? "Supabase isn't configured."
-                          : undefined;
+                        : undefined;
                     return (
                       <TableRow key={u.email}>
                         <TableCell>
@@ -261,7 +281,7 @@ export function RolesPermissionsTab({
                           <select
                             aria-label={`Role for ${u.email}`}
                             value={u.role}
-                            disabled={locked || savingEmail === u.email}
+                            disabled={locked || saving.has(u.email)}
                             title={reason}
                             data-track="settings_role_change"
                             onChange={(e) => void changeRole(u.email, e.target.value as Role)}
@@ -273,7 +293,7 @@ export function RolesPermissionsTab({
                               </option>
                             ))}
                           </select>
-                          {savingEmail === u.email && (
+                          {saving.has(u.email) && (
                             <Loader2 className="ml-2 inline h-3.5 w-3.5 animate-spin text-muted-foreground" aria-hidden />
                           )}
                         </TableCell>

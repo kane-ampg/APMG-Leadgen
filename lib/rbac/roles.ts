@@ -58,8 +58,18 @@ export const ROLES: Record<Role, RoleDef> = {
  *  path that cannot resolve a role must grant nothing, not everything. */
 export const DEFAULT_ROLE: Role = "pending";
 
+/**
+ * Runtime type guard for `Role`. Deliberately an own-property check
+ * (`Object.hasOwn`), NOT the `in` operator — `in` walks the prototype chain,
+ * so inherited `Object.prototype` members like `"constructor"`, `"toString"`,
+ * `"__proto__"`, `"hasOwnProperty"`, and `"valueOf"` would all satisfy
+ * `value in ROLES` despite never being assigned as roles. This guard
+ * validates the `viewAs` claim out of a signed-but-attacker-influenced JWT
+ * payload (see lib/auth/session.ts), so the distinction is a security
+ * boundary, not a style preference — do not "simplify" this back to `in`.
+ */
 export function isRole(value: unknown): value is Role {
-  return typeof value === "string" && value in ROLES;
+  return typeof value === "string" && Object.hasOwn(ROLES, value);
 }
 
 export function permissionsForRole(role: Role): readonly Permission[] {

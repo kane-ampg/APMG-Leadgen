@@ -32,7 +32,19 @@ export async function resolveSession(req: Request): Promise<ResolvedSession | nu
   // dots, every character of which encodeURIComponent leaves alone — but that
   // is a property of the payload, not of the parsing, and it would stop holding
   // the moment the cookie carries anything else.
-  const token = raw ? decodeURIComponent(raw) : undefined;
+  // The decode must not be able to throw. decodeURIComponent raises URIError on
+  // a malformed percent-sequence ("%", "%zz", a truncated "%E0"), any of which
+  // an attacker can set from devtools. Unhandled, that rejects out through
+  // requirePermission and 500s the authorization primitive — a denial of
+  // service strictly worse than the encoding bug the decode exists to prevent.
+  // A cookie we cannot decode is a cookie we cannot verify, so fall through to
+  // "no session" and let the existing path answer 401.
+  let token: string | undefined;
+  try {
+    token = raw ? decodeURIComponent(raw) : undefined;
+  } catch {
+    token = undefined;
+  }
   const claims = await verifySession(token);
   if (!claims) return null;
 

@@ -186,6 +186,51 @@ describe("requirePermission", () => {
     );
     expect(guard).toEqual({ ok: false, status: 403, error: expect.any(String) });
   });
+
+  /**
+   * Fix round 2 regression: decodeURIComponent throws URIError on a malformed
+   * percent-sequence, and anyone can set one from devtools or a buggy proxy.
+   * Unhandled, that throw propagates out of resolveSession as a REJECTED
+   * promise (a thrown error inside an async function rejects it), then out of
+   * requirePermission the same way, then out of the route handler as a bare
+   * 500 -- a denial of service, and worse than the encoding bug the decode
+   * exists to prevent. A cookie that cannot be decoded cannot be verified, so
+   * it must fall through to the ordinary "no token" 401 path, not reject.
+   *
+   * `.resolves.toEqual(...)` is used deliberately instead of
+   * `await requirePermission(...); expect(guard).toEqual(...)` -- if the
+   * try/catch were removed, the awaited call would throw *before* a `guard`
+   * value ever existed to assert on, which would surface as an uncaught
+   * exception failing the test for the right underlying reason but the wrong
+   * visible one. `.resolves` fails loudly and specifically on a rejection.
+   */
+  describe("malformed percent-encoded cookie value (must 401, never reject)", () => {
+    it("a bare '%' does not crash the guard", async () => {
+      mockVerifySession.mockResolvedValue(null);
+      await expect(
+        requirePermission(reqWithCookie(`${SESSION_COOKIE}=%`), "sales.view"),
+      ).resolves.toEqual({ ok: false, status: 401, error: expect.any(String) });
+      // The catch must have set token back to undefined -- proves the malformed
+      // value never reached verifySession, not just that *some* 401 came back.
+      expect(mockVerifySession).toHaveBeenCalledWith(undefined);
+    });
+
+    it("an invalid hex escape '%zz' does not crash the guard", async () => {
+      mockVerifySession.mockResolvedValue(null);
+      await expect(
+        requirePermission(reqWithCookie(`${SESSION_COOKIE}=%zz`), "sales.view"),
+      ).resolves.toEqual({ ok: false, status: 401, error: expect.any(String) });
+      expect(mockVerifySession).toHaveBeenCalledWith(undefined);
+    });
+
+    it("a truncated multi-byte escape '%E0' does not crash the guard", async () => {
+      mockVerifySession.mockResolvedValue(null);
+      await expect(
+        requirePermission(reqWithCookie(`${SESSION_COOKIE}=%E0`), "sales.view"),
+      ).resolves.toEqual({ ok: false, status: 401, error: expect.any(String) });
+      expect(mockVerifySession).toHaveBeenCalledWith(undefined);
+    });
+  });
 });
 
 describe("guardResponse", () => {

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { resolveSource, SOURCE_COOKIE, SOURCE_COOKIE_MAX_AGE } from "@/lib/portal/source";
+import { SESSION_COOKIE, verifySession } from "@/lib/auth/session";
 
 /**
  * Host wall for the customer-facing deployment.
@@ -70,6 +71,13 @@ function isPortalPath(pathname: string): boolean {
   return PORTAL_ALLOW.some((p) => pathname.startsWith(p));
 }
 
+/** Paths reachable on the admin host WITHOUT a session. Everything else needs one. */
+function isPublicAdminPath(pathname: string): boolean {
+  if (pathname === "/login") return true;
+  if (pathname.startsWith("/api/auth/")) return true;
+  return isPortalPath(pathname);
+}
+
 /**
  * Traffic-source capture (the social-media promotion loop): a /portal PAGE
  * load carrying `?utm_source=tiktok|facebook|instagram|…` — or arriving with a
@@ -96,12 +104,33 @@ function withPortalSource(req: NextRequest, res: NextResponse): NextResponse {
   return res;
 }
 
-export function middleware(req: NextRequest) {
+export async function middleware(req: NextRequest) {
   const host = req.headers.get("host") || "";
   const { pathname } = req.nextUrl;
 
   // Not a customer host -> full app (admin project, local dev).
   if (!isCustomerHost(host)) {
+    // ── Authentication gate ──────────────────────────────────────────────
+    // Signature + expiry only: proving WHO you are. What you may DO needs the
+    // role, which lives in the database — resolved in route handlers, never
+    // here, because a DB round trip per navigation on the Edge is the wrong
+    // place to pay for it.
+    if (!isPublicAdminPath(pathname)) {
+      const token = req.cookies.get(SESSION_COOKIE)?.value;
+      if (!(await verifySession(token))) {
+        if (pathname.startsWith("/api/")) {
+          // Deliberately not a redirect: a fetch() that follows a 302 to an
+          // HTML login page fails with a confusing parse error instead of a
+          // clear 401.
+          return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+        }
+        const url = req.nextUrl.clone();
+        url.pathname = "/login";
+        url.search = `?next=${encodeURIComponent(pathname + req.nextUrl.search)}`;
+        return NextResponse.redirect(url);
+      }
+    }
+
     // Dashboard PAGE loads mark the browser internal (see INTERNAL_COOKIE).
     // Portal paths are excluded on purpose — previewing /portal or clicking a
     // /t/ link must not mark anyone, or a real client landing here (e.g. dev /

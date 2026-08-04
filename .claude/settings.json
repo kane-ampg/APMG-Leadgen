@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell -Command 'Get-Process | Where-Object { $_.ProcessName -match '\\\\''node|npm'\\\\'' } | Select-Object Id,ProcessName,Path')",
+      "Bash(taskkill /PID 28640 /F)",
+      "Bash(taskkill /PID 8264 /F)",
+      "PowerShell(taskkill /PID 28640 /F)",
+      "PowerShell(taskkill /PID 8264 /F)",
+      "Bash(node -e ' *)",
+      "Bash(node -e \"console.log\\(!!require.resolve\\('pg'\\)\\)\")",
+      "PowerShell(Get-CimInstance Win32_Process -Filter \"ProcessId = 36060\")",
+      "Bash(git -C .claude/worktrees/google-sso-rbac status --short --branch)",
+      "Bash(git -C .claude/worktrees/google-sso-rbac log --oneline -15)",
+      "Bash(git -C .claude/worktrees/google-sso-rbac log --oneline main..HEAD)",
+      "Bash(git -C .claude/worktrees/google-sso-rbac log --oneline -1 -- docs/superpowers/plans/2026-08-04-google-sso-phase-2.md)",
+      "Bash(git -C .claude/worktrees/google-sso-rbac status --short)"
+    ]
+  }
+}

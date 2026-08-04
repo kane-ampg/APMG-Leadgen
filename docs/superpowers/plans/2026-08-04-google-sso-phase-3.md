@@ -24,6 +24,7 @@ Right now `roleCan(role, "roles.viewas")` exists in the catalog and is fully uni
 - **Never alter customer-portal behaviour** (`/portal`, `/t/*`, `/api/portal/*`).
 - **Never weaken Phase 1/2 guards.** Nothing under `middleware.ts`, `lib/auth/session.ts`, `lib/auth/policy.ts`, or `lib/rbac/server.ts` should need changing, and this plan does not touch any of them. If you think one needs to change, stop and ask.
 - `RbacProvider`'s public API changes from optional `initialRole`/`locked` to required `role`/`trueRole`. `app/page.tsx` is the **only** caller in the codebase (confirmed by grep) — if you find a second one, stop and ask; it likely means other work has landed on this branch since this plan was written.
+- **`RbacProvider` and `RoleSwitcher.tsx` change atomically, in the same task.** `RoleSwitcher.tsx` is the only consumer of `RbacProvider`'s context shape beyond `role`/`can`/`roleLabel` (which are unchanged) — it currently destructures `setRole`/`devMode`, both of which this phase removes. Landing the provider change without also landing the switcher rewrite leaves `tsc --noEmit` broken in between; they are one task, not two.
 - The repo has **no ESLint**. Gates are `npx tsc --noEmit`, `npx next build`, `npx vitest run`, `npx playwright test`.
 - **A green build is not sufficient evidence on this codebase.** Nine defects in Phase 1 passed every static gate, including one total site outage. Every task that touches a rendered surface or a route must be verified with a real signed-in session or a real HTTP request, not just a type-check.
 - Playwright's config pins port **3100**. Ports 3000/3001 are held by unrelated projects — never kill them.
@@ -45,10 +46,10 @@ Right now `roleCan(role, "roles.viewas")` exists in the catalog and is fully uni
 |---|---|
 | `lib/rbac/RbacProvider.tsx` | **Rewrite.** Drop the dead dev-preview mechanism; carry `role`, `trueRole`, `canViewAs` from the server |
 | `app/page.tsx` | **Modify.** Pass `role`/`trueRole` instead of `initialRole`/`locked` |
-| `app/api/auth/view-as/route.ts` | **Create.** `POST` — validates the role, checks `trueRole`, re-signs the session |
-| `app/api/auth/view-as/route.test.ts` | **Create.** Authorization-uses-trueRole, validation, cookie contents |
 | `lib/rbac/viewAs.ts` | **Create.** `requestViewAs(role)` — the one client-side fetch-and-reload, shared by both UI pieces |
 | `components/rbac/RoleSwitcher.tsx` | **Rewrite.** Real, server-backed switcher; Sales/Client/Pending, Sales first |
+| `app/api/auth/view-as/route.ts` | **Create.** `POST` — validates the role, checks `trueRole`, re-signs the session |
+| `app/api/auth/view-as/route.test.ts` | **Create.** Authorization-uses-trueRole, validation, cookie contents |
 | `components/rbac/ViewAsBanner.tsx` | **Create.** Persistent "Viewing as X · Exit", keyed off `trueRole` |
 | `components/apmg/DashboardShell.tsx` | **Modify.** Mount `ViewAsBanner` above the sidebar/main row |
 | `components/apmg/Sidebar.tsx` | **Modify.** One class fix so the sidebar stretches to its row instead of forcing full viewport height, now that the row can sit below a banner |
@@ -56,19 +57,23 @@ Right now `roleCan(role, "roles.viewas")` exists in the catalog and is fully uni
 
 ---
 
-### Task 1: `RbacProvider` carries `role`, `trueRole`, and `canViewAs`
+### Task 1: `RbacProvider` carries `role`/`trueRole`/`canViewAs`, and the real `RoleSwitcher`
+
+**Note (2026-08-04, corrected during implementation):** originally drafted as two separate tasks. The first implementer attempt correctly caught that `RoleSwitcher.tsx` is the only other consumer of `RbacProvider`'s context shape, and it still destructures `setRole`/`devMode` — fields this task removes. Splitting the provider change from the switcher rewrite leaves `tsc --noEmit` broken in the gap between them, so they are merged into one task. No code below changed as a result — only the task boundary.
 
 **Files:**
 - Modify (full rewrite): `lib/rbac/RbacProvider.tsx`
 - Modify: `app/page.tsx:34`
+- Create: `lib/rbac/viewAs.ts`
+- Modify (full rewrite): `components/rbac/RoleSwitcher.tsx`
 
 **Interfaces:**
-- Consumes: `roleCan`, `ROLES`, `type Role` (`lib/rbac/roles.ts`); `type Permission` (`lib/rbac/permissions.ts`)
-- Produces: `<RbacProvider role={Role} trueRole={Role}>`; `useRbac(): { role, roleLabel, can, trueRole, canViewAs }`; `useCan(perm)` (unchanged signature)
+- Consumes: `roleCan`, `ROLES`, `isRole`, `type Role` (`lib/rbac/roles.ts`); `type Permission` (`lib/rbac/permissions.ts`); `POST /api/auth/view-as` (Task 2 — doesn't need to exist yet for this task to compile; `fetch` has no compile-time dependency on the route existing)
+- Produces: `<RbacProvider role={Role} trueRole={Role}>`; `useRbac(): { role, roleLabel, can, trueRole, canViewAs }`; `useCan(perm)` (unchanged signature); `requestViewAs(role: Role | null): Promise<boolean>`; `<RoleSwitcher />` — renders nothing unless `canViewAs`
 
-No automated test for this task — it's a React context with no new decision logic (the interesting logic, `effectiveRole`/`roleCan`, already lives in Phase 1's tested modules). Verified by `tsc --noEmit` plus the manual check in Step 4.
+No automated test for this task — it's a React context plus presentational components with no new decision logic (the interesting logic, `effectiveRole`/`roleCan`, already lives in Phase 1's tested modules). Verified by `tsc --noEmit` plus the manual check in Step 6.
 
-- [ ] **Step 1: Confirm `app/page.tsx` is the only caller**
+- [ ] **Step 1: Confirm `app/page.tsx` is the only `<RbacProvider>` caller**
 
 ```bash
 grep -rn "RbacProvider" --include="*.tsx" .
@@ -161,24 +166,130 @@ to:
     <RbacProvider role={session.role} trueRole={session.trueRole}>
 ```
 
-- [ ] **Step 4: Typecheck**
+- [ ] **Step 4: Write the shared client helper**
+
+Create `lib/rbac/viewAs.ts`:
+
+```ts
+import type { Role } from "./roles";
+
+/**
+ * POSTs the requested preview role (or null to exit a preview) and reloads
+ * the page on success so server components re-render under the new
+ * effective role. The server re-checks roleCan(trueRole, "roles.viewas")
+ * itself (app/api/auth/view-as/route.ts) — this is a UI convenience, never
+ * the enforcement. Returns whether the request succeeded, so a caller can
+ * clear its own pending/loading state on failure without reloading.
+ */
+export async function requestViewAs(role: Role | null): Promise<boolean> {
+  const res = await fetch("/api/auth/view-as", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ role }),
+  });
+  if (res.ok) window.location.reload();
+  return res.ok;
+}
+```
+
+- [ ] **Step 5: Rewrite `RoleSwitcher.tsx`**
+
+Replace the entire contents of `components/rbac/RoleSwitcher.tsx`:
+
+```tsx
+"use client";
+
+import { useState } from "react";
+import { cn } from "@/lib/cn";
+import { useRbac } from "@/lib/rbac/RbacProvider";
+import { requestViewAs } from "@/lib/rbac/viewAs";
+import { ROLES, type Role } from "@/lib/rbac/roles";
+
+// Sales is the role checked most often when previewing, so it's listed
+// first. Admin is deliberately excluded from the options: the only audience
+// who can ever see this switcher (roleCan(trueRole, "roles.viewas")) IS
+// admin, so offering it as a preview target would just be a no-op button —
+// ViewAsBanner's Exit is the way back to the real Admin view.
+const PREVIEW_ROLES: readonly Role[] = ["sales", "client", "pending"];
+
+/**
+ * Lets an admin preview the console as another role. Rendering here is a UI
+ * convenience only — POST /api/auth/view-as re-checks roleCan(trueRole,
+ * "roles.viewas") itself, so a forged request from a non-admin is refused
+ * regardless of what this component does or doesn't show.
+ */
+export function RoleSwitcher() {
+  const { role, canViewAs } = useRbac();
+  const [pending, setPending] = useState(false);
+
+  if (!canViewAs) return null;
+
+  async function selectRole(next: Role) {
+    setPending(true);
+    const ok = await requestViewAs(next);
+    if (!ok) setPending(false);
+  }
+
+  return (
+    <div className="rounded-md border border-dashed border-border bg-background/40 p-1.5">
+      <div className="mb-1 px-1 font-mono text-[9px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+        View as
+      </div>
+      <div className="flex gap-1">
+        {PREVIEW_ROLES.map((r) => {
+          const def = ROLES[r];
+          const isActive = r === role;
+          return (
+            <button
+              key={r}
+              type="button"
+              disabled={pending}
+              onClick={() => selectRole(r)}
+              data-track="view_as_switch"
+              data-track-role={r}
+              aria-pressed={isActive}
+              title={def.description}
+              className={cn(
+                "flex-1 rounded px-1.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] transition-colors",
+                isActive
+                  ? "bg-primary-solid text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:text-foreground",
+                pending && "cursor-not-allowed opacity-60",
+              )}
+            >
+              {def.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 6: Typecheck**
 
 Run: `npx tsc --noEmit`
-Expected: clean. (If it isn't, the most likely cause is a second `<RbacProvider>` caller Step 1 missed — search again rather than patching around it.)
+Expected: clean. (If it isn't, the most likely cause is a second `<RbacProvider>` caller Step 1 missed, or a third file besides `RoleSwitcher.tsx` reading `setRole`/`devMode` off `useRbac()` — search again rather than patching around it.)
 
-- [ ] **Step 5: Manual check**
+- [ ] **Step 7: Manual check**
 
-Run `npm run dev`, sign in as `kane@apmgservices.com.au` (or whichever address resolves to `admin` in your environment — demo mode maps `MAIN_ADMIN_EMAIL` to `admin` when Supabase isn't configured). Confirm the dashboard loads exactly as before (nothing in this task changes visible behaviour yet — `RoleSwitcher` still renders nothing until Task 3).
+Run `npm run dev`, sign in as `kane@apmgservices.com.au` (or whichever address resolves to `admin` in your environment — demo mode maps `MAIN_ADMIN_EMAIL` to `admin` when Supabase isn't configured). Confirm the dashboard loads normally, then open the sidebar. Expected: a "View as" control above the theme toggle, listing Sales, Client, Pending in that order, none active. Click "Sales" — the fetch will 404 (Task 2's route doesn't exist yet), so `requestViewAs` returns `false` and the button re-enables without reloading; that's the correct behaviour for this task's state. Sign in as a non-admin (or, in demo mode, any email other than the main admin) and confirm the control is entirely absent.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add lib/rbac/RbacProvider.tsx app/page.tsx
-git commit -m "RbacProvider carries trueRole and canViewAs
+git add lib/rbac/RbacProvider.tsx app/page.tsx lib/rbac/viewAs.ts components/rbac/RoleSwitcher.tsx
+git commit -m "Replace the dead dev-preview switcher with a real, server-backed one
 
-Drops the dev-only role-preview mechanism, which app/page.tsx's
-unconditional locked=true has made unreachable since Phase 1. Both role
-and trueRole now come straight from the server-resolved session."
+RbacProvider now carries trueRole and canViewAs from the server —
+app/page.tsx's unconditional locked=true has made the old client-side
+preview mechanism unreachable since Phase 1. RoleSwitcher changes in
+the same commit since it's the only other consumer of the context
+shape being replaced. Sales, Client, Pending — Sales first since it's
+checked most often; Admin is excluded as a target (this switcher's
+only audience already is admin). The switcher POSTs to
+/api/auth/view-as, added next."
 ```
 
 ---
@@ -495,142 +606,7 @@ decode to avoid silently bypassing that file's existing test mocks."
 
 ---
 
-### Task 3: `requestViewAs` helper and the real `RoleSwitcher`
-
-**Files:**
-- Create: `lib/rbac/viewAs.ts`
-- Modify (full rewrite): `components/rbac/RoleSwitcher.tsx`
-
-**Interfaces:**
-- Consumes: `useRbac` (`lib/rbac/RbacProvider.tsx`, Task 1); `ROLES`, `type Role` (`lib/rbac/roles.ts`); `POST /api/auth/view-as` (Task 2)
-- Produces: `requestViewAs(role: Role | null): Promise<boolean>`; `<RoleSwitcher />` — renders nothing unless `canViewAs`
-
-No automated test (a two-line fetch wrapper and a presentational component; the project has no component-testing setup and adding one for this would be disproportionate). Verified by `tsc --noEmit` and the manual check below.
-
-- [ ] **Step 1: Write the shared client helper**
-
-Create `lib/rbac/viewAs.ts`:
-
-```ts
-import type { Role } from "./roles";
-
-/**
- * POSTs the requested preview role (or null to exit a preview) and reloads
- * the page on success so server components re-render under the new
- * effective role. The server re-checks roleCan(trueRole, "roles.viewas")
- * itself (app/api/auth/view-as/route.ts) — this is a UI convenience, never
- * the enforcement. Returns whether the request succeeded, so a caller can
- * clear its own pending/loading state on failure without reloading.
- */
-export async function requestViewAs(role: Role | null): Promise<boolean> {
-  const res = await fetch("/api/auth/view-as", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ role }),
-  });
-  if (res.ok) window.location.reload();
-  return res.ok;
-}
-```
-
-- [ ] **Step 2: Rewrite `RoleSwitcher.tsx`**
-
-Replace the entire contents of `components/rbac/RoleSwitcher.tsx`:
-
-```tsx
-"use client";
-
-import { useState } from "react";
-import { cn } from "@/lib/cn";
-import { useRbac } from "@/lib/rbac/RbacProvider";
-import { requestViewAs } from "@/lib/rbac/viewAs";
-import { ROLES, type Role } from "@/lib/rbac/roles";
-
-// Sales is the role checked most often when previewing, so it's listed
-// first. Admin is deliberately excluded from the options: the only audience
-// who can ever see this switcher (roleCan(trueRole, "roles.viewas")) IS
-// admin, so offering it as a preview target would just be a no-op button —
-// ViewAsBanner's Exit is the way back to the real Admin view.
-const PREVIEW_ROLES: readonly Role[] = ["sales", "client", "pending"];
-
-/**
- * Lets an admin preview the console as another role. Rendering here is a UI
- * convenience only — POST /api/auth/view-as re-checks roleCan(trueRole,
- * "roles.viewas") itself, so a forged request from a non-admin is refused
- * regardless of what this component does or doesn't show.
- */
-export function RoleSwitcher() {
-  const { role, canViewAs } = useRbac();
-  const [pending, setPending] = useState(false);
-
-  if (!canViewAs) return null;
-
-  async function selectRole(next: Role) {
-    setPending(true);
-    const ok = await requestViewAs(next);
-    if (!ok) setPending(false);
-  }
-
-  return (
-    <div className="rounded-md border border-dashed border-border bg-background/40 p-1.5">
-      <div className="mb-1 px-1 font-mono text-[9px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
-        View as
-      </div>
-      <div className="flex gap-1">
-        {PREVIEW_ROLES.map((r) => {
-          const def = ROLES[r];
-          const isActive = r === role;
-          return (
-            <button
-              key={r}
-              type="button"
-              disabled={pending}
-              onClick={() => selectRole(r)}
-              data-track="view_as_switch"
-              data-track-role={r}
-              aria-pressed={isActive}
-              title={def.description}
-              className={cn(
-                "flex-1 rounded px-1.5 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.08em] transition-colors",
-                isActive
-                  ? "bg-primary-solid text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:text-foreground",
-                pending && "cursor-not-allowed opacity-60",
-              )}
-            >
-              {def.label}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-```
-
-- [ ] **Step 3: Typecheck**
-
-Run: `npx tsc --noEmit`
-Expected: clean.
-
-- [ ] **Step 4: Manual check**
-
-Sign in as an admin, open the sidebar. Expected: a "View as" control above the theme toggle, listing Sales, Client, Pending in that order, none active. Click "Sales": the page reloads and the sidebar nav now reflects Sales's permissions (no Leads tab; a Sales tab appears). Open devtools → Application → Cookies and confirm `apmg_session` changed value. Sign in as a non-admin (or, in demo mode, any email other than the main admin) and confirm the control is entirely absent.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add lib/rbac/viewAs.ts components/rbac/RoleSwitcher.tsx
-git commit -m "Replace the dead dev-preview switcher with the real, server-backed one
-
-Sales, Client, Pending — Sales first since it's checked most often.
-Admin is excluded as a target (this switcher's only audience already
-is admin); ViewAsBanner's Exit is the way back."
-```
-
----
-
-### Task 4: `ViewAsBanner` and mounting it
+### Task 3: `ViewAsBanner` and mounting it
 
 **Files:**
 - Create: `components/rbac/ViewAsBanner.tsx`
@@ -638,7 +614,7 @@ is admin); ViewAsBanner's Exit is the way back."
 - Modify: `components/apmg/Sidebar.tsx:98`
 
 **Interfaces:**
-- Consumes: `useRbac` (Task 1); `requestViewAs` (Task 3); `ROLES` (`lib/rbac/roles.ts`); `Button` (`components/ui/button.tsx`)
+- Consumes: `useRbac` (`lib/rbac/RbacProvider.tsx`, Task 1); `requestViewAs` (`lib/rbac/viewAs.ts`, Task 1); `ROLES` (`lib/rbac/roles.ts`); `Button` (`components/ui/button.tsx`)
 - Produces: `<ViewAsBanner />` — renders nothing unless currently previewing
 
 - [ ] **Step 1: Write `ViewAsBanner.tsx`**
@@ -837,7 +813,7 @@ overflowing its row now that a banner can sit above it."
 
 ---
 
-### Task 5: E2E regression test and final verification pass
+### Task 4: E2E regression test and final verification pass
 
 **Files:**
 - Modify: `tests/e2e/auth.spec.ts`
@@ -857,7 +833,7 @@ test("the view-as endpoint rejects anonymous callers", async ({ request }) => {
 });
 ```
 
-(Authenticated view-as scenarios — the switcher appearing, the banner, the trueRole-not-effective-role authorization case — are already covered by Task 2's unit tests, which mint real signed sessions directly rather than needing a live Google sign-in, and by the manual checks in Tasks 3–4. There's no way to fake a Google OAuth sign-in in Playwright without adding a test-only auth bypass to production code, which this project has deliberately avoided everywhere else.)
+(Authenticated view-as scenarios — the switcher appearing, the banner, the trueRole-not-effective-role authorization case — are already covered by Task 2's unit tests, which mint real signed sessions directly rather than needing a live Google sign-in, and by the manual checks in Tasks 1 and 3. There's no way to fake a Google OAuth sign-in in Playwright without adding a test-only auth bypass to production code, which this project has deliberately avoided everywhere else.)
 
 - [ ] **Step 2: Run it**
 

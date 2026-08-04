@@ -23,6 +23,7 @@ import { SalesArrivalsModal } from "./SalesArrivalsModal";
 import { SalesPage } from "./SalesPage";
 import { SectorPlaybooksPage } from "./SectorPlaybooksPage";
 import { ServicesPortal } from "./ServicesPortal";
+import { SettingsPage } from "./SettingsPage";
 import { Sidebar } from "./Sidebar";
 import { TelemetryInspector } from "./TelemetryInspector";
 import { TelemetryPage } from "./TelemetryPage";
@@ -146,6 +147,8 @@ export function DashboardShell({ user }: { user?: SessionUser }) {
                   <LegalDocsPage />
                 ) : activeTab === "telemetry" ? (
                   <TelemetryPage />
+                ) : activeTab === "settings" ? (
+                  <SettingsPage />
                 ) : (
                   <ComingSoon tab={activeTab} />
                 )}

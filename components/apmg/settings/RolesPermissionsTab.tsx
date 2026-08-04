@@ -13,6 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/cn";
+import type { AppUserRow } from "@/lib/auth/userStore";
 import { ROLES, type Role } from "@/lib/rbac/roles";
 import { Reveal } from "../Reveal";
 import { PermissionMatrix } from "./PermissionMatrix";
@@ -25,30 +26,28 @@ import { PermissionMatrix } from "./PermissionMatrix";
  * payload, so this component disables the right controls without hardcoding an
  * email address that could drift from `MAIN_ADMIN_EMAIL`. A disabled dropdown
  * is a courtesy; /api/admin/users is what actually refuses.
+ *
+ * The GET response shape (`ApiState`) reuses `AppUserRow` via a type-only
+ * import rather than hand-duplicating the field list: `import type` is erased
+ * at build time, so it pulls no runtime code — and none of the service-role
+ * fetch logic in userStore.ts — into this client bundle.
  */
 
-interface ApiUser {
-  email: string;
-  name: string | null;
-  picture_url: string | null;
-  role: Role;
-  created_at: string;
-  last_login_at: string | null;
-}
 interface ApiState {
   mode: "live" | "demo";
   canPersist: boolean;
   actorEmail: string;
   mainAdminEmail: string;
   assignableRoles: Role[];
-  users: ApiUser[];
+  users: AppUserRow[];
+  usersError?: boolean;
 }
 type Load =
   | { status: "loading" }
   | { status: "error"; error: string }
   | ({ status: "ready" } & ApiState);
 
-function initialsFor(u: ApiUser): string {
+function initialsFor(u: AppUserRow): string {
   const source = (u.name ?? u.email.split("@")[0]).trim();
   const parts = source.split(/[\s._-]+/).filter(Boolean);
   return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
@@ -221,7 +220,29 @@ export function RolesPermissionsTab({
             </Button>
           </div>
 
-          {load.users.length === 0 ? (
+          {load.usersError ? (
+            <div className="flex flex-col items-center gap-3 px-4 py-8 text-center">
+              <p className="flex items-center gap-2 text-sm text-destructive">
+                <AlertTriangle className="h-4 w-4 shrink-0" aria-hidden />
+                The user list couldn&rsquo;t be read.
+              </p>
+              <p className="max-w-md text-xs text-muted-foreground">
+                This isn&rsquo;t &ldquo;nobody has signed in yet&rdquo; — the query
+                against Supabase failed, so the roster below may be missing real
+                users. If this is a new deployment, check that the{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono">
+                  supabase/app-users.sql
+                </code>{" "}
+                migration has been applied and that the{" "}
+                <code className="rounded bg-muted px-1 py-0.5 font-mono">app_users</code>{" "}
+                table exists.
+              </p>
+              <Button variant="outline" size="sm" onClick={() => void refresh()} className="gap-1.5">
+                <RefreshCw className="h-3.5 w-3.5" aria-hidden />
+                Retry
+              </Button>
+            </div>
+          ) : load.users.length === 0 ? (
             <p className="px-4 py-8 text-center text-sm text-muted-foreground">
               Nobody has signed in yet. A user appears here the first time they
               sign in with Google, starting on Pending.

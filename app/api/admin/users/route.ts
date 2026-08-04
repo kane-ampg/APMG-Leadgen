@@ -35,7 +35,17 @@ export async function GET(req: Request): Promise<Response> {
   const guard = await requirePermission(req, "users.manage");
   if (!guard.ok) return guardResponse(guard);
 
-  const users = await listUsers();
+  const result = await listUsers();
+  // "error" and [] are both possible here, and they must not be conflated:
+  // [] can mean a genuinely empty table OR (via listUsers()'s demo-mode branch)
+  // "Supabase not configured" -- `mode`/`canPersist` already cover that case.
+  // "error" means the query itself failed against a *configured* Supabase --
+  // wrong schema, missing table, transient outage -- which `mode`/`canPersist`
+  // cannot detect since they only look at configuration, not query health.
+  // That gets its own flag so the UI can tell the two apart rather than
+  // rendering "nobody has signed in yet" over a broken backend.
+  const usersError = result === "error";
+  const users = usersError ? [] : result;
   const configured = supabaseTarget().state === "ok";
   return json({
     // Mirrors the convention in LegalDocsPage: say plainly when nothing can be
@@ -46,6 +56,7 @@ export async function GET(req: Request): Promise<Response> {
     mainAdminEmail: MAIN_ADMIN_EMAIL,
     assignableRoles: assignableRoles(),
     users,
+    usersError,
   });
 }
 
@@ -85,6 +96,16 @@ export async function PATCH(req: Request): Promise<Response> {
   // One read serves both the existence check and the admin census that
   // denyRoleChange needs, so the two can never disagree with each other.
   const users = await listUsers();
+  // Checked before the existence check, deliberately: if the read itself
+  // failed, `users` carries no information about who exists. Falling through
+  // to the 404 below would misreport a broken backend as "not a console user
+  // yet" -- the exact false diagnosis this route exists to avoid.
+  if (users === "error") {
+    return json(
+      { error: "The user list couldn't be read, so this change wasn't attempted. Try again shortly." },
+      503,
+    );
+  }
   if (!users.some((u) => u.email === email)) {
     return json({ error: "That address is not a console user yet. They must sign in once first." }, 404);
   }

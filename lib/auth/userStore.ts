@@ -131,8 +131,17 @@ export interface AppUserRow {
  * in the catalog are coerced to `pending` rather than dropped — an operator
  * needs to SEE a row with a bad role in order to fix it, and hiding it would
  * make the account invisible while it still exists.
+ *
+ * Returns the literal `"error"` — never `[]` — when the query itself fails
+ * (non-2xx response or a thrown error). `[]` is reserved for the demo/
+ * unconfigured case and for a genuinely empty table. An empty roster and a
+ * failed query demand opposite responses from an operator: "nobody has signed
+ * in yet" versus "go check the backend" (wrong schema, missing table,
+ * transient outage, a migration that never ran). Collapsing both into `[]`
+ * means every caller sees only the empty-roster message and chases the wrong
+ * problem, so the distinction is carried all the way out to the API and the UI.
  */
-export async function listUsers(): Promise<AppUserRow[]> {
+export async function listUsers(): Promise<AppUserRow[] | "error"> {
   const target = supabaseTarget();
   if (target.state !== "ok") return [];
   try {
@@ -143,7 +152,7 @@ export async function listUsers(): Promise<AppUserRow[]> {
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
       console.error(`[auth] app_users list ${res.status}:`, detail.slice(0, 500));
-      return [];
+      return "error";
     }
     const rows = (await res.json().catch(() => [])) as unknown;
     if (!Array.isArray(rows)) return [];
@@ -160,7 +169,7 @@ export async function listUsers(): Promise<AppUserRow[]> {
     }).filter((r) => r.email !== "");
   } catch (e) {
     console.error("[auth] app_users list failed:", e);
-    return [];
+    return "error";
   }
 }
 

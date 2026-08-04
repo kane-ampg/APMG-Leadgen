@@ -94,7 +94,22 @@ describe("GET /api/admin/users", () => {
     listUsers.mockResolvedValue([]);
     const res = await GET(get());
     expect(res.status).toBe(200);
-    expect((await res.json()).users).toEqual([]);
+    const body = await res.json();
+    expect(body.users).toEqual([]);
+    expect(body.usersError).toBeFalsy();
+  });
+
+  it("returns 200 with usersError: true when the query itself failed, not a 500", async () => {
+    // A failed query against a *configured* Supabase must not be reported as
+    // "nobody has signed in yet" -- the page still has to render and explain
+    // itself, so this stays a 200 with an explicit flag rather than an error
+    // status or a silently empty roster.
+    listUsers.mockResolvedValue("error");
+    const res = await GET(get());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.users).toEqual([]);
+    expect(body.usersError).toBe(true);
   });
 });
 
@@ -103,6 +118,18 @@ describe("PATCH /api/admin/users — authorization", () => {
     requirePermission.mockResolvedValue({ ok: false, status: 403, error: "nope" });
     const res = await PATCH(patch({ email: "x@apmgservices.com.au", role: "sales" }));
     expect(res.status).toBe(403);
+    expect(setUserRole).not.toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /api/admin/users — user list read failure", () => {
+  it("503s and never calls setUserRole when listUsers() can't be read, instead of 404ing as an unknown user", async () => {
+    // The important pin: a read failure must not fall through to the
+    // "not a console user yet" 404 -- that would misreport a broken backend
+    // as an unknown address. This is checked before the existence check.
+    listUsers.mockResolvedValue("error");
+    const res = await PATCH(patch({ email: "nicole@apmgservices.com.au", role: "sales" }));
+    expect(res.status).toBe(503);
     expect(setUserRole).not.toHaveBeenCalled();
   });
 });

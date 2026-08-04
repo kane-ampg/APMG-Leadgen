@@ -31,7 +31,7 @@ export default async function Page() {
   };
 
   return (
-    <RbacProvider initialRole={session.role} locked>
+    <RbacProvider role={session.role} trueRole={session.trueRole}>
       <SalesProvider>
         <DashboardShell user={user} />
       </SalesProvider>

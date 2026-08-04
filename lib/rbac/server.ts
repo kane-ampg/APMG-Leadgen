@@ -24,7 +24,15 @@ export interface ResolvedSession {
 
 export async function resolveSession(req: Request): Promise<ResolvedSession | null> {
   const cookie = req.headers.get("cookie") ?? "";
-  const token = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`))?.[1];
+  const raw = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`))?.[1];
+  // Decode defensively. Next's ResponseCookies.set() percent-encodes on write
+  // and only RequestCookies.get() decodes on read, and hand-parsing the raw
+  // header is exactly what silently broke the OAuth `next` cookie earlier in
+  // this plan. It happens to be a no-op today — a compact JWT is base64url plus
+  // dots, every character of which encodeURIComponent leaves alone — but that
+  // is a property of the payload, not of the parsing, and it would stop holding
+  // the moment the cookie carries anything else.
+  const token = raw ? decodeURIComponent(raw) : undefined;
   const claims = await verifySession(token);
   if (!claims) return null;
 

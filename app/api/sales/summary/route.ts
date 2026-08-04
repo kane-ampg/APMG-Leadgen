@@ -5,9 +5,13 @@ import { generateLeadSummary, type LeadFacts } from "@/lib/ai/leadSummary";
 /**
  * POST /api/sales/summary — (re)generate the AI brief for a lead.
  * Permission-gated to sales.view. Body: LeadFacts. Returns { summary, source }.
+ *
+ * NOTE: requirePermission currently resolves the role from the apmg-role cookie
+ * / x-apmg-role header (placeholder). Once Supabase auth is wired, swap that for
+ * a verified session — see lib/rbac/server.ts.
  */
 export async function POST(req: NextRequest) {
-  const guard = await requirePermission(req, "sales.view");
+  const guard = requirePermission(req, "sales.view");
   if (!guard.ok) return guardResponse(guard);
 
   let body: Partial<LeadFacts>;

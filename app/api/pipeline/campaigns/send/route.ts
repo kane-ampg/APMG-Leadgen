@@ -22,7 +22,6 @@ import { serviceBySlug } from "@/lib/pipeline/services";
 import { loadPlaybooks, playbookPdfUrl } from "@/lib/pipeline/sectorStore";
 import { resolveSectorForCategory } from "@/lib/pipeline/sectors";
 import { fetchSuppressedEmails, insertPortalEvents } from "@/lib/portal/server";
-import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Sends an outreach email campaign to a set of stored leads. Each message's CTA
 // is rewritten to the attribution hook /t/<leadId>?c=<campaign> (app/t/[id]),
@@ -39,6 +38,10 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // (present when a service template was picked on Step 2) swap the branded
 // email's hero image to that service's photo; absent, n8n keeps its default
 // team photo.
+//
+// SECURITY — TODO before exposing publicly: like the other pipeline routes this
+// has only a same-origin (CSRF) floor, NOT real auth. The UI gates the action
+// behind the `campaigns.send` permission; enforce it here too once auth lands.
 //
 // After a live send, one `email_sent` row per recipient is recorded in
 // portal_events (lead_id + campaign + category) — that's what the Telemetry
@@ -116,9 +119,6 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return json({ ok: false, sent: 0, mode: "noop", error: "Forbidden." }, 403);
   }
-
-  const guard = await requirePermission(req, "campaigns.send");
-  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

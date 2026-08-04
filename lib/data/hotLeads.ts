@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { DEMO_LEAD_ACTIVITY, type LeadActivity, type LeadActivityEvent } from "@/lib/data/leadActivity";
 import { isHotLead, leadScore } from "@/lib/data/leadScore";
 import { adminHeaders } from "@/lib/portal/adminKey";
@@ -489,23 +489,11 @@ export function useHotLeads(): HotLeadsSnapshot {
 
 /** HOT leads still awaiting hand-off — the sidebar badge number. Deliberately
  *  the hot cut-off only, whatever band the page is displaying: it's a work
- *  queue, not a lifetime tally, and it's hidden at zero by the caller.
- *
- *  `enabled` gates the underlying subscribe/poll entirely: `GET
- *  /api/sales/handoff` (which this store's poll fetches — see
- *  `refreshHotLeads`) is admin-only (`hotleads.handoff`), so a caller without
- *  `hotleads.view` would otherwise 403 every 20s forever purely to feed a
- *  badge it can never see. Pass `can("hotleads.view")`; when false the hook
- *  never joins the shared listener set (so it can't be the one keeping the
- *  poll timer alive) and reports 0. */
-export function useHotLeadsWaiting(enabled: boolean): number {
-  const sub = useCallback(
-    (cb: () => void) => (enabled ? subscribe(cb) : () => {}),
-    [enabled],
-  );
+ *  queue, not a lifetime tally, and it's hidden at zero by the caller. */
+export function useHotLeadsWaiting(): number {
   return useSyncExternalStore(
-    sub,
-    () => (enabled ? waitingCount() : 0),
+    subscribe,
+    () => waitingCount(),
     () => 0,
   );
 }

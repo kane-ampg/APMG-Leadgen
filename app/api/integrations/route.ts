@@ -8,7 +8,6 @@ import {
   writeSetting,
   SETTING_ENQUIRY_NOTIFY_EMAIL,
 } from "@/lib/pipeline/server";
-import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Realtime state + configuration for the app's n8n integrations (Integrations
 // tab). GET resolves each integration's live wiring (a URL saved from this tab
@@ -16,6 +15,10 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // one integration so an operator can point the app at their automation without
 // editing environment variables. Server-side (keeps the service role key off
 // the browser and never returns the full webhook URL — only a masked form).
+//
+// SECURITY — TODO before exposing publicly: same-origin (CSRF) floor only, NOT
+// real auth; gate on an admin permission here once auth lands (saving a webhook
+// URL redirects where outreach data is sent).
 export const runtime = "nodejs";
 
 /** Only http(s) URLs, capped so a paste can't wedge the store. */
@@ -72,10 +75,6 @@ export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, mode: "live", integrations: [], error: "Forbidden." }, { status: 403 });
   }
-
-  const guard = await requirePermission(req, "integrations.view");
-  if (!guard.ok) return guardResponse(guard);
-
   const supa = supabaseTarget();
   const mode = supa.state === "ok" ? "live" : "demo";
   const integrations = await resolveState();
@@ -90,9 +89,6 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
-
-  const guard = await requirePermission(req, "integrations.manage");
-  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

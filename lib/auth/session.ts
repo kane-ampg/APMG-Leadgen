@@ -1,80 +1,28 @@
-import { SignJWT, jwtVerify } from "jose";
-import { isRole, type Role } from "@/lib/rbac/roles";
+import { seedThemeForRole } from "@/lib/theme";
+import { type AppUser } from "./users";
 
 /**
- * The session cookie: a signed JWT carrying IDENTITY ONLY.
- *
- * The role is deliberately NOT in here — it is read from app_users per request
- * so that changing someone's role in the admin UI takes effect immediately
- * rather than whenever their cookie happens to expire.
- *
- * EDGE-SAFE BY CONTRACT: middleware.ts imports this module, so it must never
- * import `server-only`, Node built-ins, or anything that touches the database.
+ * Client-side session cookies (temporary until Supabase auth lands):
+ *  - `apmg-role` — already read by lib/rbac/server.ts to guard API routes.
+ *  - `apmg-user` — email, resolved back to a user via findUser() on the server.
+ * 30-day lifetime; sign-out expires both.
  */
+const MAX_AGE = 60 * 60 * 24 * 30;
 
-export const SESSION_COOKIE = "apmg_session";
-/** Read by the root layout to pick the pre-paint theme for a role. */
-export const THEME_SEED_COOKIE = "apmg-theme-seed";
-export const SESSION_TTL_SECONDS = 60 * 60 * 12; // 12 hours
+export const USER_COOKIE = "apmg-user";
+export const ROLE_COOKIE = "apmg-role";
 
-export interface SessionClaims {
-  email: string;
-  name?: string;
-  picture?: string;
-  /** Role being previewed. Authority still comes from the DB — see policy.ts. */
-  viewAs?: Role | null;
+export function setSessionCookies(user: AppUser): void {
+  document.cookie = `${ROLE_COOKIE}=${user.role}; path=/; max-age=${MAX_AGE}; samesite=lax`;
+  document.cookie = `${USER_COOKIE}=${encodeURIComponent(user.email)}; path=/; max-age=${MAX_AGE}; samesite=lax`;
+  // Sign-in is the moment to pick a starting theme (Sales reps land in light).
+  // Sign-in always does a full navigation afterwards, so the root layout's
+  // bootstrap reads this on the very next paint — no flash, and no second
+  // inline script anywhere in the app.
+  seedThemeForRole(user.role);
 }
 
-const encoder = new TextEncoder();
-
-function secret(): Uint8Array {
-  const value = process.env.AUTH_SECRET;
-  if (!value) throw new Error("AUTH_SECRET is not set — cannot sign or verify sessions");
-  return encoder.encode(value);
-}
-
-export async function signSession(claims: SessionClaims): Promise<string> {
-  return new SignJWT({
-    name: claims.name,
-    picture: claims.picture,
-    viewAs: claims.viewAs ?? undefined,
-  })
-    .setProtectedHeader({ alg: "HS256" })
-    .setSubject(claims.email.trim().toLowerCase())
-    .setIssuedAt()
-    .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
-    .sign(secret());
-}
-
-/** Verify signature and expiry. Any failure is a null session — never a throw,
- *  so callers can treat "no session" and "bad session" identically. */
-export async function verifySession(
-  token: string | undefined,
-): Promise<SessionClaims | null> {
-  if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, secret(), { algorithms: ["HS256"] });
-    const email = typeof payload.sub === "string" ? payload.sub : null;
-    if (!email) return null;
-    return {
-      email,
-      name: typeof payload.name === "string" ? payload.name : undefined,
-      picture: typeof payload.picture === "string" ? payload.picture : undefined,
-      viewAs: isRole(payload.viewAs) ? payload.viewAs : null,
-    };
-  } catch {
-    return null;
-  }
-}
-
-export function sessionCookieOptions() {
-  return {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    // Lax, NOT Strict: the OAuth callback is a top-level cross-site navigation
-    // and Strict would strip the cookie from it.
-    sameSite: "lax",
-    path: "/",
-    maxAge: SESSION_TTL_SECONDS,
-  } as const;
+export function clearSessionCookies(): void {
+  document.cookie = `${ROLE_COOKIE}=; path=/; max-age=0`;
+  document.cookie = `${USER_COOKIE}=; path=/; max-age=0`;
 }

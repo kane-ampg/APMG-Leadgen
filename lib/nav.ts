@@ -119,7 +119,6 @@ export const ROLE_LANDING_TAB: Record<Role, TabId> = {
   admin: "overview",
   client: "overview",
   sales: "sales",
-  pending: "overview",
 };
 
 /** The role's home tab, falling back to the first tab it may open. */

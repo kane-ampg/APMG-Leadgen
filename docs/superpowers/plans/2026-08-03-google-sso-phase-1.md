@@ -391,15 +391,6 @@ describe("isSafeNextPath", () => {
     expect(isSafeNextPath("/\\evil.example")).toBe(false);
   });
 
-  it("rejects control characters a URL parser would strip", () => {
-    // Every browser and Node strip TAB/CR/LF from anywhere in the string
-    // BEFORE reading its structure, so these parse as //evil.example.
-    expect(isSafeNextPath("/\t/evil.example")).toBe(false);
-    expect(isSafeNextPath("/\n/evil.example")).toBe(false);
-    expect(isSafeNextPath("/\r/evil.example")).toBe(false);
-    expect(isSafeNextPath("/\t\\evil.example")).toBe(false);
-  });
-
   it("rejects empty and missing values", () => {
     expect(isSafeNextPath("")).toBe(false);
     expect(isSafeNextPath(null)).toBe(false);
@@ -498,14 +489,6 @@ export function denyRoleChange(args: {
  */
 export function isSafeNextPath(next: string | null | undefined): boolean {
   if (!next) return false;
-  // Reject control characters outright instead of trying to emulate them.
-  // WHATWG URL parsers — every browser, and Node's URL — strip TAB, CR and LF
-  // from ANYWHERE in a string before reading its structure. So "/\t/evil.host"
-  // survives a naive leading-"//" check and then parses as //evil.host, which
-  // is a working open redirect off the back of a genuine sign-in. Refusing the
-  // whole character class is safer than matching each parser's strip-list,
-  // because a quirk we failed to anticipate cannot reopen the hole.
-  if (/[\u0000-\u001f\u007f]/.test(next)) return false;
   if (!next.startsWith("/")) return false;
   // "//host" is protocol-relative; "/\host" is normalised to it by some browsers.
   if (next.startsWith("//") || next.startsWith("/\\")) return false;
@@ -541,11 +524,9 @@ and an open-redirect guard for the post-login next path."
 - Produces:
   - `getUserRole(email: string): Promise<Role>`
   - `upsertOnLogin(u: { email: string; name?: string; picture?: string }): Promise<Role>`
-
-> **Scope:** ship only these two. `listUsers()` and `setUserRole()` belong to the
-> Phase 2 admin tab and have no caller in Phase 1 — adding them here would mean
-> shipping exported, untested, uncalled code. They go in with the UI that uses
-> them.
+  - `listUsers(): Promise<AppUserRow[]>`
+  - `setUserRole(email: string, role: Role): Promise<"ok" | "demo" | "error">`
+  - `interface AppUserRow { email: string; name: string | null; picture_url: string | null; role: Role; created_at: string; last_login_at: string | null }`
 
 - [ ] **Step 1: Write the migration**
 
@@ -608,6 +589,15 @@ import { isRole, type Role } from "@/lib/rbac/roles";
 
 const TABLE = "app_users";
 
+export interface AppUserRow {
+  email: string;
+  name: string | null;
+  picture_url: string | null;
+  role: Role;
+  created_at: string;
+  last_login_at: string | null;
+}
+
 function authHeaders(key: string): Record<string, string> {
   return { apikey: key, Authorization: `Bearer ${key}` };
 }
@@ -636,21 +626,8 @@ export async function getUserRole(email: string): Promise<Role> {
   }
 }
 
-/**
- * Record a sign-in: create the row on first sight (at the column's `pending`
- * default), refresh the profile fields, stamp `last_login_at`.
- *
- * `role` is NEVER written here, and that is structural, not incidental.
- * `getUserRole` collapses every failure — 5xx, rate limit, schema-cache reload,
- * a dropped connection — into `"pending"`, which is indistinguishable from a
- * genuinely pending user. Reading the role and writing it back through an
- * upsert would therefore demote a real admin to `pending` on a transient blip
- * during their own sign-in, locking out the very account that must never be
- * lockable. Splitting this into an insert that ignores conflicts plus a PATCH
- * that omits `role` makes that class of bug impossible rather than guarded
- * against: no code path here can write the column at all. Roles change only by
- * explicit admin action.
- */
+/** Create the row on first sight at `pending`, refresh the profile fields, and
+ *  stamp last_login_at. Never downgrades an existing role. */
 export async function upsertOnLogin(u: {
   email: string;
   name?: string;
@@ -660,30 +637,64 @@ export async function upsertOnLogin(u: {
   const target = supabaseTarget();
   if (target.state !== "ok") return demoRole(email);
 
-  // First sight only. `ignore-duplicates` leaves an existing row untouched, so
-  // a returning user's stored role is never in the write path.
+  const existing = await getUserRole(email);
+  const body = [
+    {
+      email,
+      name: u.name ?? null,
+      picture_url: u.picture ?? null,
+      // Send the role we already have so the upsert cannot reset it.
+      role: existing,
+      last_login_at: new Date().toISOString(),
+    },
+  ];
   try {
     const res = await fetch(`${target.base}/rest/v1/${TABLE}?on_conflict=email`, {
       method: "POST",
       headers: {
         ...authHeaders(target.key),
         "Content-Type": "application/json",
-        Prefer: "resolution=ignore-duplicates,return=minimal",
+        Prefer: "resolution=merge-duplicates,return=minimal",
       },
-      body: JSON.stringify([{ email }]),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      console.error(`[auth] app_users insert ${res.status}:`, detail.slice(0, 500));
+      console.error(`[auth] app_users upsert ${res.status}:`, detail.slice(0, 500));
     }
   } catch (e) {
-    console.error("[auth] app_users insert failed:", e);
+    console.error("[auth] app_users upsert failed:", e);
   }
+  return existing;
+}
 
-  // Profile refresh — deliberately no `role` key in this body.
+/** Every console user, newest sign-in first. Used by the Phase 2 admin tab. */
+export async function listUsers(): Promise<AppUserRow[]> {
+  const target = supabaseTarget();
+  if (target.state !== "ok") return [];
   try {
     const res = await fetch(
-      `${target.base}/rest/v1/${TABLE}?email=eq.${encodeURIComponent(email)}`,
+      `${target.base}/rest/v1/${TABLE}?select=email,name,picture_url,role,created_at,last_login_at&order=last_login_at.desc.nullslast`,
+      { headers: authHeaders(target.key), cache: "no-store" },
+    );
+    if (!res.ok) return [];
+    const rows = (await res.json().catch(() => [])) as AppUserRow[];
+    return Array.isArray(rows) ? rows.filter((r) => isRole(r.role)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Change one user's role. Callers MUST have run denyRoleChange first. */
+export async function setUserRole(
+  email: string,
+  role: Role,
+): Promise<"ok" | "demo" | "error"> {
+  const target = supabaseTarget();
+  if (target.state !== "ok") return "demo";
+  try {
+    const res = await fetch(
+      `${target.base}/rest/v1/${TABLE}?email=eq.${encodeURIComponent(email.trim().toLowerCase())}`,
       {
         method: "PATCH",
         headers: {
@@ -691,25 +702,14 @@ export async function upsertOnLogin(u: {
           "Content-Type": "application/json",
           Prefer: "return=minimal",
         },
-        body: JSON.stringify({
-          name: u.name ?? null,
-          picture_url: u.picture ?? null,
-          last_login_at: new Date().toISOString(),
-        }),
+        body: JSON.stringify({ role }),
       },
     );
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      console.error(`[auth] app_users profile refresh ${res.status}:`, detail.slice(0, 500));
-    }
+    return res.ok ? "ok" : "error";
   } catch (e) {
-    console.error("[auth] app_users profile refresh failed:", e);
+    console.error("[auth] app_users role update failed:", e);
+    return "error";
   }
-
-  // Read the role back rather than assuming it. A failure here returns
-  // "pending", which is only used to seed the starting theme — never persisted
-  // — so a blip costs a dark theme, not an account.
-  return getUserRole(email);
 }
 ```
 
@@ -1117,7 +1117,7 @@ export async function GET(req: Request): Promise<Response> {
 Create `app/api/auth/google/callback/route.ts`:
 
 ```ts
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import {
   OAUTH_NEXT_COOKIE,
   OAUTH_STATE_COOKIE,
@@ -1138,47 +1138,24 @@ import { upsertOnLogin } from "@/lib/auth/userStore";
 
 export const runtime = "nodejs";
 
-/**
- * Everything that must not outlive a sign-in attempt: the three handshake
- * cookies, plus the two pre-migration cookies the old browser-set session used.
- * Cleared on EVERY exit path — success and failure alike. A failed attempt that
- * leaves `apmg-role` in place is exactly the authorization bypass this migration
- * exists to close, and a denied consent should not strand handshake state in the
- * browser of a shared machine.
- */
-const STALE_COOKIES = [
-  OAUTH_STATE_COOKIE,
-  OAUTH_VERIFIER_COOKIE,
-  OAUTH_NEXT_COOKIE,
-  "apmg-role",
-  "apmg-user",
-] as const;
-
-function clearStale(res: NextResponse): NextResponse {
-  for (const name of STALE_COOKIES) res.cookies.set(name, "", { path: "/", maxAge: 0 });
-  return res;
+function fail(req: Request, reason: string): Response {
+  return NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(reason)}`, req.url));
 }
 
-function fail(req: NextRequest, reason: string): Response {
-  return clearStale(
-    NextResponse.redirect(new URL(`/login?error=${encodeURIComponent(reason)}`, req.url)),
-  );
-}
-
-export async function GET(req: NextRequest): Promise<Response> {
+export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
 
-  // Read through NextRequest's cookie jar, NOT a hand-rolled Cookie-header
-  // regex. `ResponseCookies.set()` percent-encodes on the way out and only
-  // `RequestCookies.get()` decodes on the way back, so hand-parsing returns
-  // "%2Fleads" for a stored next of "/leads" — which then fails isSafeNextPath
-  // and silently kills return-to-page for every destination except "/". Letting
-  // the framework own both sides removes the mismatch entirely.
-  const expectedState = req.cookies.get(OAUTH_STATE_COOKIE)?.value;
-  const verifier = req.cookies.get(OAUTH_VERIFIER_COOKIE)?.value;
-  const storedNext = req.cookies.get(OAUTH_NEXT_COOKIE)?.value;
+  // Read-then-compare the CSRF state. A mismatch means this callback was not
+  // started by this browser.
+  const cookieHeader = req.headers.get("cookie") ?? "";
+  const read = (name: string) =>
+    cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))?.[1];
+
+  const expectedState = read(OAUTH_STATE_COOKIE);
+  const verifier = read(OAUTH_VERIFIER_COOKIE);
+  const storedNext = read(OAUTH_NEXT_COOKIE);
 
   if (url.searchParams.get("error")) return fail(req, "google-denied");
   if (!code || !state || !expectedState || state !== expectedState) return fail(req, "bad-state");
@@ -1215,10 +1192,13 @@ export async function GET(req: NextRequest): Promise<Response> {
     path: "/",
     maxAge: 60 * 60 * 24 * 365,
   });
-  // Same clearing as every failure path — handshake cookies plus the old
-  // client-set ones, which are an authorization bypass while any browser holds
-  // them and any code still reads them.
-  return clearStale(res);
+  for (const name of [OAUTH_STATE_COOKIE, OAUTH_VERIFIER_COOKIE, OAUTH_NEXT_COOKIE]) {
+    res.cookies.set(name, "", { path: "/", maxAge: 0 });
+  }
+  // Belt and braces: kill the old client-set cookies if any browser still holds them.
+  res.cookies.set("apmg-role", "", { path: "/", maxAge: 0 });
+  res.cookies.set("apmg-user", "", { path: "/", maxAge: 0 });
+  return res;
 }
 ```
 
@@ -1320,27 +1300,7 @@ export interface ResolvedSession {
 
 export async function resolveSession(req: Request): Promise<ResolvedSession | null> {
   const cookie = req.headers.get("cookie") ?? "";
-  const raw = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`))?.[1];
-  // Decode defensively. Next's ResponseCookies.set() percent-encodes on write
-  // and only RequestCookies.get() decodes on read, and hand-parsing the raw
-  // header is exactly what silently broke the OAuth `next` cookie earlier in
-  // this plan. It happens to be a no-op today — a compact JWT is base64url plus
-  // dots, every character of which encodeURIComponent leaves alone — but that
-  // is a property of the payload, not of the parsing, and it would stop holding
-  // the moment the cookie carries anything else.
-  // The decode must not be able to throw. decodeURIComponent raises URIError on
-  // a malformed percent-sequence ("%", "%zz", a truncated "%E0"), any of which
-  // an attacker can set from devtools. Unhandled, that rejects out through
-  // requirePermission and 500s the authorization primitive — a denial of
-  // service strictly worse than the encoding bug the decode exists to prevent.
-  // A cookie we cannot decode is a cookie we cannot verify, so fall through to
-  // "no session" and let the existing path answer 401.
-  let token: string | undefined;
-  try {
-    token = raw ? decodeURIComponent(raw) : undefined;
-  } catch {
-    token = undefined;
-  }
+  const token = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`))?.[1];
   const claims = await verifySession(token);
   if (!claims) return null;
 
@@ -1535,38 +1495,13 @@ Use this permission per route and method. **Open each file and check which metho
 | `pipeline/campaigns/send` | — | `campaigns.send` |
 | `pipeline/campaigns/find-emails` | `campaigns.send` | `campaigns.send` |
 | `sales/queue` | `sales.view` | `sales.view` |
-| `sales/handoff` | see note below | **depends on `kind`** — see note below |
+| `sales/handoff` | — | `hotleads.handoff` |
 | `integrations` | `integrations.view` | `integrations.manage` |
 | `legal` | `legal.view` | `legal.manage` |
 | `compose-prompt` | `composer.view` | `composer.view` |
 | `sector-playbooks` | `playbooks.view` | `playbooks.manage` |
 | `sector-playbooks/kb` | `playbooks.manage` | `playbooks.manage` |
 | `sector-playbooks/pdf` | `playbooks.manage` | `playbooks.manage` |
-
-> **`sales/handoff` serves two audiences, and one permission breaks one of them.**
-> The first draft of this plan guarded the whole route with `hotleads.handoff`,
-> which only `admin` holds. But `POST { kind: "returned" }` is the **rep-facing**
-> "Return to admin" action — `SalesProvider.tsx`'s `returnLeads()` calls it from
-> the Sales tab, and the bulk button there is already gated on `leads.contact`,
-> which `sales` does hold. An admin-only permission 403s every rep on every
-> click: the feature is completely broken for the role it exists for, on deploy.
->
-> The permission therefore depends on `kind`:
->
-> - `kind === "returned"` → **`leads.contact`** (held by `sales` and `admin`, and
->   the same gate the UI already applies, so client and server agree)
-> - `kind` of `"handoff"` / `"archived"` → **`hotleads.handoff`** (admin-only
->   staging actions, driven from the Hot Leads page)
->
-> This means POST must parse its body **before** authorising, since `kind` is in
-> the body. That is safe — body parsing has no side effect, and the guard still
-> runs before `gate()` and before any database read or write. `DELETE` takes the
-> same `kind` as a query parameter and needs the same branching, or a rep can
-> return a lead but not undo it.
->
-> Check `GET` as well: `lib/data/hotLeads.ts` reads it, and the Sidebar (which
-> renders for reps) imports `useHotLeadsWaiting` from that module — if any
-> rep-reachable path polls it, an admin-only permission means a 403 per poll.
 
 Delete the now-obsolete `SECURITY — TODO before exposing publicly` comment in `app/api/integrations/route.ts:19-21`, since this task is what it was waiting for.
 
@@ -1612,28 +1547,15 @@ lead database, and that passes when the Origin header is absent."
 
 ---
 
-### Task 9: Google-only login and the session-aware shell
-
-> **Why these are one task:** deleting `lib/auth/users.ts` breaks every file that
-> imported `AppUser` (`app/page.tsx`, `components/apmg/Sidebar.tsx`). Splitting
-> the deletion from the repair would leave a task boundary — and a commit — where
-> the build does not compile. Do the whole swap in one reviewable unit.
+### Task 9: Login page — Google as the only door
 
 **Files:**
 - Modify: `app/login/page.tsx:171-328`
 - Delete: `lib/auth/users.ts`
-- Create: `components/apmg/PendingAccess.tsx`
-- Modify: `app/page.tsx`
-- Modify: `app/layout.tsx`
-- Modify: `components/apmg/Sidebar.tsx:17-18,31-32,286-328`
-- Modify: `components/apmg/DashboardShell.tsx` (user prop type only)
-- Modify: `components/apmg/OverviewPage.tsx:11,161,294,305,384` (user prop type only)
-- Create: `lib/themeBootstrap.ts` — the pure bootstrap builder, outside the `"use client"` boundary
-- Modify: `lib/theme.ts` — import the shared key/type from the new module; drop the now-dead `THEME_BOOTSTRAP`
 
 **Interfaces:**
-- Consumes: `/api/auth/google/start` (Task 5); `resolveSession` (Task 6); `THEME_SEED_COOKIE` (Task 4); `themeBootstrap` from `lib/theme.ts`
-- Produces: a login page with no password path; `AppUser` no longer exists, replaced by `SessionUser` (`{ email: string; name: string; initials: string }`) exported from `components/apmg/Sidebar.tsx` and consumed by `DashboardShell`
+- Consumes: `/api/auth/google/start` (Task 5)
+- Produces: a login page with no password path; `AppUser` type no longer exists
 
 - [ ] **Step 1: Delete the credential directory**
 
@@ -1721,12 +1643,37 @@ const LOGIN_ERRORS: Record<string, string> = {
 
 Because the rewritten page no longer renders a `<Button>`, remove the now-unused `import { Button } from "@/components/ui/button";` too.
 
-At this point the build is intentionally broken — `app/page.tsx` and
-`components/apmg/Sidebar.tsx` still import the deleted `AppUser`. Do **not**
-commit here; the remaining steps repair it, and the single commit lands at the
-end.
+- [ ] **Step 3: Typecheck and build**
 
-- [ ] **Step 3: Create the pending screen**
+Run: `npx tsc --noEmit && npx next build`
+Expected: clean. Errors will point at the other files that imported `AppUser` from the deleted module (`app/page.tsx`, `components/apmg/Sidebar.tsx`) — Task 10 fixes those, so it is fine to complete Task 10 before this build passes.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add app/login/page.tsx lib/auth/users.ts
+git commit -m "Make Google the only sign-in path
+
+Deletes the hardcoded user list and the shared plaintext password,
+which stayed a valid door bypassing SSO entirely. Removes the inert
+Microsoft button rather than leaving a control that never works."
+```
+
+---
+
+### Task 10: Session-aware shell — pending screen, sign-out, theme
+
+**Files:**
+- Create: `components/apmg/PendingAccess.tsx`
+- Modify: `app/page.tsx`
+- Modify: `app/layout.tsx`
+- Modify: `components/apmg/Sidebar.tsx:17-18,31-32,286-328`
+
+**Interfaces:**
+- Consumes: `resolveSession` (Task 6); `THEME_SEED_COOKIE` (Task 4); `themeBootstrap` from `lib/theme.ts`
+- Produces: a `SessionUser` shape (`{ email: string; name: string; initials: string }`) passed to `DashboardShell` and `Sidebar` in place of the deleted `AppUser`
+
+- [ ] **Step 1: Create the pending screen**
 
 Create `components/apmg/PendingAccess.tsx`:
 
@@ -1769,7 +1716,7 @@ export function PendingAccess({ email }: { email: string }) {
 }
 ```
 
-- [ ] **Step 4: Wire the session into the page**
+- [ ] **Step 2: Wire the session into the page**
 
 Replace the contents of `app/page.tsx`:
 
@@ -1811,7 +1758,7 @@ export default async function Page() {
 }
 ```
 
-- [ ] **Step 5: Replace the deleted AppUser type**
+- [ ] **Step 3: Replace the deleted AppUser type**
 
 In `components/apmg/Sidebar.tsx`, delete the two imports from the removed modules (lines 17-18):
 
@@ -1830,21 +1777,9 @@ export interface SessionUser {
 }
 ```
 
-…and change the prop to `user?: SessionUser`.
+…and change the prop to `user?: SessionUser`. Update `DashboardShell`'s `user` prop type to match by importing `SessionUser` from `./Sidebar`.
 
-Then update **both** downstream consumers to import `SessionUser` from `./Sidebar` in place of the deleted `AppUser`:
-
-- `components/apmg/DashboardShell.tsx` — the import at line 8 and the `user?: AppUser` prop at line 34.
-- `components/apmg/OverviewPage.tsx` — the import at line 11 and **four** usages: line 161 (`OverviewHeader`'s `user?:`), line 294 (`OverviewPage`), line 305 (`PipelineOverview`), line 384 (`SalesOverview`).
-
-> `OverviewPage.tsx` is easy to miss — it was absent from the first draft of this
-> plan. Nobody traced `DashboardShell`'s `user` prop down into the component it
-> renders, so the file typechecks today only because `lib/auth/users.ts` still
-> exists. Deleting that file in Step 1 makes this a fourth broken consumer, and
-> Step 8 cannot reach zero `tsc` errors without it. Verify with
-> `grep -rn "AppUser" app lib components` that no consumer remains before Step 8.
-
-- [ ] **Step 6: Make sign-out server-side**
+- [ ] **Step 4: Make sign-out server-side**
 
 In `components/apmg/Sidebar.tsx`, replace the sign-out button's `onClick` (line 320-323):
 
@@ -1866,81 +1801,15 @@ Also remove the hardcoded `?? "KR"` / `?? "Kane Reroma"` / `?? "kane@apmgservice
 {user?.email ?? ""}
 ```
 
-- [ ] **Step 7: Seed the theme from the cookie**
+- [ ] **Step 5: Seed the theme from the cookie**
 
-> **Read this before editing `app/layout.tsx`.** `lib/theme.ts` begins with
-> `"use client"`. `RootLayout` is a Server Component, and a Server Component may
-> not call a function that lives behind a client boundary — doing so throws at
-> request time on **every route**, a total site outage. Neither `tsc --noEmit`
-> nor `next build` catches it, because these routes are server-rendered on
-> demand and the build never executes them; only a real HTTP request does. So
-> the pure part of the theme module has to come out from behind that boundary
-> first.
-
-**7a — extract the pure bootstrap.** Create `lib/themeBootstrap.ts` with **no**
-`"use client"` directive, holding only the pure string builder and the key it
-references — no hooks, no DOM access, importable from both sides:
-
-```ts
-/**
- * Deliberately NOT a client module. The root layout is a Server Component and
- * cannot call into a `"use client"` file, so the pure bootstrap builder lives
- * here while the hooks that genuinely need the browser stay in lib/theme.ts.
- */
-
-export type Theme = "dark" | "light";
-
-/** localStorage key holding the user's explicit choice, which always wins. */
-export const THEME_STORAGE_KEY = "apmg-theme";
-
-/**
- * Inline script string injected before paint so the persisted theme (or the
- * given fallback) is applied with no flash of the wrong one.
- *
- * The operator console defaults to dark (ui-standards §4.2). The Sales desk
- * defaults to LIGHT — reps work it in daylight, often on a phone, and dark
- * chrome under glare is the first thing to cost legibility. Either way an
- * explicit choice from the toggle is stored and always wins from then on, so
- * the fallback only ever decides the very first visit.
- */
-export function themeBootstrap(fallback: Theme = "dark"): string {
-  return (
-    `(function(){try{` +
-    `var t=localStorage.getItem('${THEME_STORAGE_KEY}');` +
-    `if(t!=='light'&&t!=='dark'){t='${fallback}';}` +
-    `var r=document.documentElement;` +
-    `r.classList.toggle('dark',t==='dark');r.style.colorScheme=t;` +
-    `}catch(e){` +
-    `document.documentElement.classList.toggle('dark','${fallback}'==='dark');` +
-    `}})();`
-  );
-}
-```
-
-**7b — slim `lib/theme.ts` down.** Delete its local `STORAGE_KEY`, its `Theme`
-type, its `themeBootstrap` function and the now-dead `THEME_BOOTSTRAP` constant
-(nothing imports it once the layout calls `themeBootstrap(seed)` — verify with
-`grep -rn "THEME_BOOTSTRAP" app lib components`). Import what it still needs
-instead, keeping the `"use client"` directive and the hooks:
-
-```ts
-import { THEME_STORAGE_KEY, type Theme } from "@/lib/themeBootstrap";
-```
-
-Replace the remaining `STORAGE_KEY` references in `useTheme` and
-`seedThemeForRole` with `THEME_STORAGE_KEY`, and re-export the type for existing
-consumers if any rely on it: `export type { Theme };`
-
-`app/portal/layout.tsx:5` mentions `THEME_BOOTSTRAP` in a comment — update that
-prose to say `themeBootstrap` so the reference is not left dangling.
-
-**7c — wire the layout.** `app/layout.tsx` currently imports `THEME_BOOTSTRAP` (line 3), is a **synchronous** component (line 27), and hardcodes `dark` in the `<html>` className (line 35). All three change.
+`app/layout.tsx` currently imports `THEME_BOOTSTRAP` (line 3), is a **synchronous** component (line 27), and hardcodes `dark` in the `<html>` className (line 35). All three change.
 
 Replace the import on line 3:
 
 ```tsx
 import { cookies } from "next/headers";
-import { themeBootstrap } from "@/lib/themeBootstrap";
+import { themeBootstrap } from "@/lib/theme";
 import { THEME_SEED_COOKIE } from "@/lib/auth/session";
 ```
 
@@ -1970,34 +1839,12 @@ And use the seeded bootstrap in the inline script, leaving the long comment abov
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap(seed) }} />
 ```
 
-- [ ] **Step 8: Typecheck, build, AND actually serve a request**
+- [ ] **Step 6: Typecheck and build**
 
 Run: `npx tsc --noEmit && npx next build`
-Expected: both clean — this is the point at which all the fallout from deleting `lib/auth/users.ts` is resolved. If either fails, the task is not done; fix before committing.
+Expected: both clean — this is the point at which all the fallout from deleting `lib/auth/users.ts` is resolved.
 
-**A green build is not sufficient evidence here, and this step is where that was
-learned the hard way.** The client-boundary violation described in Step 7 passes
-both `tsc` and `next build` and still 500s every route, because these pages are
-server-rendered on demand and the build never executes them. So also start the
-dev server and fetch real pages before you believe it:
-
-```bash
-npm run dev &
-# wait for "Ready", then:
-curl -s -o /dev/null -w '%{http_code} /\n'       http://localhost:3000/
-curl -s -o /dev/null -w '%{http_code} /login\n'  http://localhost:3000/login
-curl -s -o /dev/null -w '%{http_code} /portal\n' http://localhost:3000/portal
-```
-
-All three must be `200` (or a `3xx` for `/` once the Task 7 gate exists). Any
-`500` means a runtime boundary or import error the static gates cannot see. Check
-the dev-server output for the stack trace, and stop the server when done.
-
-> Port note: another project on this machine may already hold port 3000. If Next
-> reports it is using a different port, use that port in the curls rather than
-> assuming 3000 — and do not kill the other process.
-
-- [ ] **Step 9: Verify end to end**
+- [ ] **Step 7: Verify end to end**
 
 With the dev server running:
 
@@ -2006,30 +1853,20 @@ With the dev server running:
 3. Click Sign out → back at `/login`; visiting `/` redirects again
 4. In Supabase, set another signed-in user's role to `pending` and reload their session → they see the Access pending screen
 
-- [ ] **Step 10: Commit**
-
-One commit for the whole swap — the tree never compiles without both halves.
+- [ ] **Step 8: Commit**
 
 ```bash
-git add app/login/page.tsx lib/auth/users.ts app/page.tsx app/layout.tsx \
-        components/apmg/PendingAccess.tsx components/apmg/Sidebar.tsx \
-        components/apmg/DashboardShell.tsx components/apmg/OverviewPage.tsx \
-        lib/theme.ts lib/themeBootstrap.ts
-git commit -m "Make Google the only sign-in path and wire the session in
+git add app/page.tsx app/layout.tsx components/apmg/PendingAccess.tsx components/apmg/Sidebar.tsx components/apmg/DashboardShell.tsx
+git commit -m "Wire the session into the shell
 
-Deletes the hardcoded user list and the shared plaintext password,
-which stayed a valid door bypassing SSO entirely, and removes the inert
-Microsoft button rather than leaving a control that never works.
-
-Same commit carries the repair, because deleting AppUser breaks its
-importers: the pending-access screen, server-side sign-out (HttpOnly
-cookies can't be cleared from JS), and theme seeding from a cookie set
-at callback time so there's no flash."
+Adds the pending-access screen, moves sign-out server-side (HttpOnly
+cookies can't be cleared from JS), and seeds the theme from a cookie
+set at callback time so there's no flash."
 ```
 
 ---
 
-### Task 10: Playwright regression tests for the gate
+### Task 11: Playwright regression tests for the gate
 
 **Files:**
 - Create: `playwright.config.ts`
@@ -2165,5 +2002,5 @@ test that the customer portal still loads anonymously."
 
 ## Follow-on phases (separate plans)
 
-- **Phase 2 — Roles and Permissions tab.** `SettingsPage` with sub-tabs, the user table, the permission matrix, and `app/api/admin/users/route.ts` applying `denyRoleChange` (already built and tested in Task 2). Phase 2 also adds `listUsers()` and `setUserRole()` to `lib/auth/userStore.ts` — deliberately deferred out of Phase 1, which has no caller for them.
+- **Phase 2 — Roles and Permissions tab.** `SettingsPage` with sub-tabs, the user table, the permission matrix, and `app/api/admin/users/route.ts` applying `denyRoleChange` (already built and tested in Task 2).
 - **Phase 3 — View-as switcher.** `/api/auth/view-as`, `RbacProvider` carrying both `role` and `trueRole`, and the exit banner that must render off the **true** role or an admin gets stranded in a role they can't leave. `effectiveRole` (Task 2) already implements the server side.

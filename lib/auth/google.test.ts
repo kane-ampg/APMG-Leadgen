@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { pkceChallenge, randomToken } from "./google";
+import { NextRequest, NextResponse } from "next/server";
+import { OAUTH_NEXT_COOKIE, pkceChallenge, randomToken } from "./google";
+import { isSafeNextPath } from "./policy";
 
 /**
  * Only the pure, input->output helpers are covered here. Everything else in
@@ -47,5 +49,51 @@ describe("pkceChallenge", () => {
   it("is deterministic for the same verifier", async () => {
     const verifier = randomToken();
     expect(await pkceChallenge(verifier)).toBe(await pkceChallenge(verifier));
+  });
+});
+
+describe("OAUTH_NEXT_COOKIE encode/decode round trip (regression, fix round 1)", () => {
+  // Fix-round Important 1: ResponseCookies.set() percent-encodes a cookie
+  // value on write; only RequestCookies.get() decodes it back on read. The
+  // callback route used to read the raw Cookie header with a hand-rolled
+  // regex, which never decodes — so a stored "/leads" round-tripped as the
+  // literal string "%2Fleads", which isSafeNextPath rejects outright (it
+  // doesn't start with "/"), silently killing return-to-page for every
+  // destination. This test exercises the real next/server classes end to
+  // end — no mocked Google, no HTTP server — to pin down both halves of
+  // that behavior so a future regression back to a hand-rolled reader would
+  // be caught here rather than discovered live in Task 7.
+  it("NextResponse encodes the cookie value on write (the trigger for the bug)", () => {
+    const res = NextResponse.redirect("http://localhost:3000/");
+    res.cookies.set(OAUTH_NEXT_COOKIE, "/leads", { path: "/", httpOnly: true });
+
+    // What a browser actually stores and echoes back on the next request is
+    // this raw Set-Cookie name=value pair — already percent-encoded.
+    const setCookie = res.headers.get("set-cookie") ?? "";
+    const echoedPair = setCookie.split(";")[0];
+    expect(echoedPair).toBe(`${OAUTH_NEXT_COOKIE}=%2Fleads`);
+
+    // A hand-rolled reader of the raw header (the old, buggy approach) would
+    // extract this still-encoded value and hand it straight to
+    // isSafeNextPath, which rejects it — reproducing the exact silent
+    // failure Important 1 described.
+    const rawValue = echoedPair.split("=")[1];
+    expect(isSafeNextPath(rawValue)).toBe(false);
+  });
+
+  it("NextRequest decodes the cookie value back on read (the fix)", () => {
+    const res = NextResponse.redirect("http://localhost:3000/");
+    res.cookies.set(OAUTH_NEXT_COOKIE, "/leads", { path: "/", httpOnly: true });
+    const echoedPair = (res.headers.get("set-cookie") ?? "").split(";")[0];
+
+    // Simulates the browser sending that exact Set-Cookie pair back as the
+    // Cookie header on the callback request.
+    const req = new NextRequest("http://localhost:3000/api/auth/google/callback", {
+      headers: { cookie: echoedPair },
+    });
+    const decoded = req.cookies.get(OAUTH_NEXT_COOKIE)?.value;
+
+    expect(decoded).toBe("/leads");
+    expect(isSafeNextPath(decoded)).toBe(true);
   });
 });

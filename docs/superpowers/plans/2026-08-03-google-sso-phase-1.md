@@ -1535,13 +1535,38 @@ Use this permission per route and method. **Open each file and check which metho
 | `pipeline/campaigns/send` | — | `campaigns.send` |
 | `pipeline/campaigns/find-emails` | `campaigns.send` | `campaigns.send` |
 | `sales/queue` | `sales.view` | `sales.view` |
-| `sales/handoff` | — | `hotleads.handoff` |
+| `sales/handoff` | see note below | **depends on `kind`** — see note below |
 | `integrations` | `integrations.view` | `integrations.manage` |
 | `legal` | `legal.view` | `legal.manage` |
 | `compose-prompt` | `composer.view` | `composer.view` |
 | `sector-playbooks` | `playbooks.view` | `playbooks.manage` |
 | `sector-playbooks/kb` | `playbooks.manage` | `playbooks.manage` |
 | `sector-playbooks/pdf` | `playbooks.manage` | `playbooks.manage` |
+
+> **`sales/handoff` serves two audiences, and one permission breaks one of them.**
+> The first draft of this plan guarded the whole route with `hotleads.handoff`,
+> which only `admin` holds. But `POST { kind: "returned" }` is the **rep-facing**
+> "Return to admin" action — `SalesProvider.tsx`'s `returnLeads()` calls it from
+> the Sales tab, and the bulk button there is already gated on `leads.contact`,
+> which `sales` does hold. An admin-only permission 403s every rep on every
+> click: the feature is completely broken for the role it exists for, on deploy.
+>
+> The permission therefore depends on `kind`:
+>
+> - `kind === "returned"` → **`leads.contact`** (held by `sales` and `admin`, and
+>   the same gate the UI already applies, so client and server agree)
+> - `kind` of `"handoff"` / `"archived"` → **`hotleads.handoff`** (admin-only
+>   staging actions, driven from the Hot Leads page)
+>
+> This means POST must parse its body **before** authorising, since `kind` is in
+> the body. That is safe — body parsing has no side effect, and the guard still
+> runs before `gate()` and before any database read or write. `DELETE` takes the
+> same `kind` as a query parameter and needs the same branching, or a rep can
+> return a lead but not undo it.
+>
+> Check `GET` as well: `lib/data/hotLeads.ts` reads it, and the Sidebar (which
+> renders for reps) imports `useHotLeadsWaiting` from that module — if any
+> rep-reachable path polls it, an admin-only permission means a 403 per poll.
 
 Delete the now-obsolete `SECURITY — TODO before exposing publicly` comment in `app/api/integrations/route.ts:19-21`, since this task is what it was waiting for.
 

@@ -1602,6 +1602,7 @@ lead database, and that passes when the Origin header is absent."
 - Modify: `app/layout.tsx`
 - Modify: `components/apmg/Sidebar.tsx:17-18,31-32,286-328`
 - Modify: `components/apmg/DashboardShell.tsx` (user prop type only)
+- Modify: `components/apmg/OverviewPage.tsx:11,161,294,305,384` (user prop type only)
 
 **Interfaces:**
 - Consumes: `/api/auth/google/start` (Task 5); `resolveSession` (Task 6); `THEME_SEED_COOKIE` (Task 4); `themeBootstrap` from `lib/theme.ts`
@@ -1802,7 +1803,19 @@ export interface SessionUser {
 }
 ```
 
-…and change the prop to `user?: SessionUser`. Update `DashboardShell`'s `user` prop type to match by importing `SessionUser` from `./Sidebar`.
+…and change the prop to `user?: SessionUser`.
+
+Then update **both** downstream consumers to import `SessionUser` from `./Sidebar` in place of the deleted `AppUser`:
+
+- `components/apmg/DashboardShell.tsx` — the import at line 8 and the `user?: AppUser` prop at line 34.
+- `components/apmg/OverviewPage.tsx` — the import at line 11 and **four** usages: line 161 (`OverviewHeader`'s `user?:`), line 294 (`OverviewPage`), line 305 (`PipelineOverview`), line 384 (`SalesOverview`).
+
+> `OverviewPage.tsx` is easy to miss — it was absent from the first draft of this
+> plan. Nobody traced `DashboardShell`'s `user` prop down into the component it
+> renders, so the file typechecks today only because `lib/auth/users.ts` still
+> exists. Deleting that file in Step 1 makes this a fourth broken consumer, and
+> Step 8 cannot reach zero `tsc` errors without it. Verify with
+> `grep -rn "AppUser" app lib components` that no consumer remains before Step 8.
 
 - [ ] **Step 6: Make sign-out server-side**
 
@@ -1885,7 +1898,7 @@ One commit for the whole swap — the tree never compiles without both halves.
 ```bash
 git add app/login/page.tsx lib/auth/users.ts app/page.tsx app/layout.tsx \
         components/apmg/PendingAccess.tsx components/apmg/Sidebar.tsx \
-        components/apmg/DashboardShell.tsx
+        components/apmg/DashboardShell.tsx components/apmg/OverviewPage.tsx
 git commit -m "Make Google the only sign-in path and wire the session in
 
 Deletes the hardcoded user list and the shared plaintext password,

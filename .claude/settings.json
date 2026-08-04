@@ -16,7 +16,20 @@
       "Bash(git -C .claude/worktrees/google-sso-rbac status --short)",
       "Bash(bash \"C:/Users/Kane/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/sdd-workspace\" docs/superpowers/plans/2026-08-04-google-sso-phase-3.md)",
       "Bash(bash \"C:/Users/Kane/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/task-brief\" --help)",
-      "Bash(bash \"C:/Users/Kane/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/task-brief\" docs/superpowers/plans/2026-08-04-google-sso-phase-3.md 1)"
+      "Bash(bash \"C:/Users/Kane/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/task-brief\" docs/superpowers/plans/2026-08-04-google-sso-phase-3.md 1)",
+      "PowerShell(taskkill /PID 36060 /F)",
+      "Bash(nohup npm run dev)",
+      "Bash(disown)",
+      "Bash(npm run *)",
+      "Bash(echo \"started with pid $!\")",
+      "Bash(node .tmp-mint-session.mjs kane@apmgservices.com.au)",
+      "Bash(node .tmp-mint-session.mjs qa-check-nonadmin@apmgservices.com.au)",
+      "Bash(curl -s --cookie apmg_session=__TRACKED_VAR__ http://localhost:3000/ -o /tmp/admin-page.html -w 'HTTP %{http_code}\\\\n')",
+      "Bash(curl -s --cookie apmg_session=__TRACKED_VAR__ http://localhost:3000/ -o /tmp/nonadmin-page.html -w 'HTTP %{http_code}\\\\n')",
+      "Bash(cd \"C:/Users/Kane/Desktop/APMG/leadgen/.claude/worktrees/google-sso-rbac\" && rm -f .tmp-mint-session.mjs && rm -f /tmp/admin-page.html /tmp/nonadmin-page.html /tmp/dev-3200.log && git status --short)"
+    ],
+    "additionalDirectories": [
+      "\\tmp"
     ]
   }
 }

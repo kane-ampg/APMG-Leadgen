@@ -41,8 +41,21 @@ export async function getUserRole(email: string): Promise<Role> {
   }
 }
 
-/** Create the row on first sight at `pending`, refresh the profile fields, and
- *  stamp last_login_at. Never downgrades an existing role. */
+/**
+ * Record a sign-in: create the row on first sight (at the column's `pending`
+ * default), refresh the profile fields, stamp `last_login_at`.
+ *
+ * `role` is NEVER written here, and that is structural, not incidental.
+ * `getUserRole` collapses every failure — 5xx, rate limit, schema-cache reload,
+ * a dropped connection — into `"pending"`, which is indistinguishable from a
+ * genuinely pending user. Reading the role and writing it back through an
+ * upsert would therefore demote a real admin to `pending` on a transient blip
+ * during their own sign-in, locking out the very account that must never be
+ * lockable. Splitting this into an insert that ignores conflicts plus a PATCH
+ * that omits `role` makes that class of bug impossible rather than guarded
+ * against: no code path here can write the column at all. Roles change only by
+ * explicit admin action.
+ */
 export async function upsertOnLogin(u: {
   email: string;
   name?: string;
@@ -52,33 +65,54 @@ export async function upsertOnLogin(u: {
   const target = supabaseTarget();
   if (target.state !== "ok") return demoRole(email);
 
-  const existing = await getUserRole(email);
-  const body = [
-    {
-      email,
-      name: u.name ?? null,
-      picture_url: u.picture ?? null,
-      // Send the role we already have so the upsert cannot reset it.
-      role: existing,
-      last_login_at: new Date().toISOString(),
-    },
-  ];
+  // First sight only. `ignore-duplicates` leaves an existing row untouched, so
+  // a returning user's stored role is never in the write path.
   try {
     const res = await fetch(`${target.base}/rest/v1/${TABLE}?on_conflict=email`, {
       method: "POST",
       headers: {
         ...authHeaders(target.key),
         "Content-Type": "application/json",
-        Prefer: "resolution=merge-duplicates,return=minimal",
+        Prefer: "resolution=ignore-duplicates,return=minimal",
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify([{ email }]),
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      console.error(`[auth] app_users upsert ${res.status}:`, detail.slice(0, 500));
+      console.error(`[auth] app_users insert ${res.status}:`, detail.slice(0, 500));
     }
   } catch (e) {
-    console.error("[auth] app_users upsert failed:", e);
+    console.error("[auth] app_users insert failed:", e);
   }
-  return existing;
+
+  // Profile refresh — deliberately no `role` key in this body.
+  try {
+    const res = await fetch(
+      `${target.base}/rest/v1/${TABLE}?email=eq.${encodeURIComponent(email)}`,
+      {
+        method: "PATCH",
+        headers: {
+          ...authHeaders(target.key),
+          "Content-Type": "application/json",
+          Prefer: "return=minimal",
+        },
+        body: JSON.stringify({
+          name: u.name ?? null,
+          picture_url: u.picture ?? null,
+          last_login_at: new Date().toISOString(),
+        }),
+      },
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      console.error(`[auth] app_users profile refresh ${res.status}:`, detail.slice(0, 500));
+    }
+  } catch (e) {
+    console.error("[auth] app_users profile refresh failed:", e);
+  }
+
+  // Read the role back rather than assuming it. A failure here returns
+  // "pending", which is only used to seed the starting theme — never persisted
+  // — so a blip costs a dark theme, not an account.
+  return getUserRole(email);
 }

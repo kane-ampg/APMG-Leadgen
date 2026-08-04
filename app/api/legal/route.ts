@@ -6,6 +6,7 @@ import {
   MAX_VERSION_LEN,
   type LegalDocs,
 } from "@/lib/legal/legalDocs";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Legal Documents config API (Legal Documents tab). GET returns the current
 // published terms/privacy + version (or in-code placeholder); PUT saves the
@@ -43,6 +44,10 @@ export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "legal.view");
+  if (!guard.ok) return guardResponse(guard);
+
   return Response.json(await state());
 }
 
@@ -50,6 +55,9 @@ export async function PUT(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "legal.manage");
+  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

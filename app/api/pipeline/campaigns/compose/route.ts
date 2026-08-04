@@ -15,6 +15,7 @@ import { buildComposeKb, loadPlaybooks } from "@/lib/pipeline/sectorStore";
 import { draftEmail } from "@/lib/ai/composeEmail";
 import { COMPOSE_ANGLES } from "@/lib/ai/composePrompt";
 import { loadComposePrompt, type ComposePromptConfig } from "@/lib/ai/composeStore";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // "Compose email": drafts a per-lead cold email in-app with the Claude API
 // (lib/ai/composeEmail.ts), grounded in the sector knowledge base for the
@@ -124,6 +125,9 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return json({ ok: false, mode: "noop", error: "Forbidden." }, 403);
   }
+
+  const guard = await requirePermission(req, "campaigns.send");
+  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

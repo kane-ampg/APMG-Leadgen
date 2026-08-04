@@ -6,6 +6,7 @@ import {
   supabaseTarget,
   webhookAuthHeaders,
 } from "@/lib/pipeline/server";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // "Find emails": scrapes contact addresses for stored leads that came off the
 // CSV import with a website but no email. The selected leads are POSTed to the
@@ -135,6 +136,9 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return json({ ok: false, mode: "noop", error: "Forbidden." }, 403);
   }
+
+  const guard = await requirePermission(req, "campaigns.send");
+  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

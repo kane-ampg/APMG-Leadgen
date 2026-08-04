@@ -5,6 +5,7 @@ import {
   sameOrigin,
   supabaseTarget,
 } from "@/lib/pipeline/server";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Receives a batch of parsed leads from the Pipeline tool and inserts them into
 // Supabase via the PostgREST endpoint. Runs on Node (keeps the service role key
@@ -74,6 +75,9 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return json({ ok: false, inserted: 0, mode: "noop", error: "Forbidden." }, 403);
   }
+
+  const guard = await requirePermission(req, "pipeline.import");
+  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

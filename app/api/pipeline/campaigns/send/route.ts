@@ -22,6 +22,7 @@ import { serviceBySlug } from "@/lib/pipeline/services";
 import { loadPlaybooks, playbookPdfUrl } from "@/lib/pipeline/sectorStore";
 import { resolveSectorForCategory } from "@/lib/pipeline/sectors";
 import { fetchSuppressedEmails, insertPortalEvents } from "@/lib/portal/server";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Sends an outreach email campaign to a set of stored leads. Each message's CTA
 // is rewritten to the attribution hook /t/<leadId>?c=<campaign> (app/t/[id]),
@@ -119,6 +120,9 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return json({ ok: false, sent: 0, mode: "noop", error: "Forbidden." }, 403);
   }
+
+  const guard = await requirePermission(req, "campaigns.send");
+  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

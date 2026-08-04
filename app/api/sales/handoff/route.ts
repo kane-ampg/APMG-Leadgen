@@ -5,6 +5,7 @@ import {
   portalAdminAuthorized,
   type PortalEventRow,
 } from "@/lib/portal/server";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 import {
   isMarkerKind,
   MARKER_EVENT,
@@ -198,6 +199,11 @@ function gate(req: Request): { base: string; key: string } | Response {
 }
 
 export async function GET(req: Request): Promise<Response> {
+  if (!sameOrigin(req)) return json({ ok: false, error: "Forbidden." }, 403);
+
+  const guard = await requirePermission(req, "hotleads.handoff");
+  if (!guard.ok) return guardResponse(guard);
+
   const target = gate(req);
   if (target instanceof Response) return target;
 
@@ -207,6 +213,11 @@ export async function GET(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  if (!sameOrigin(req)) return json({ ok: false, error: "Forbidden." }, 403);
+
+  const guard = await requirePermission(req, "hotleads.handoff");
+  if (!guard.ok) return guardResponse(guard);
+
   const target = gate(req);
   if (target instanceof Response) return target;
 
@@ -293,6 +304,11 @@ export async function POST(req: Request): Promise<Response> {
 }
 
 export async function DELETE(req: Request): Promise<Response> {
+  if (!sameOrigin(req)) return json({ ok: false, error: "Forbidden." }, 403);
+
+  const guard = await requirePermission(req, "hotleads.handoff");
+  if (!guard.ok) return guardResponse(guard);
+
   const target = gate(req);
   if (target instanceof Response) return target;
 

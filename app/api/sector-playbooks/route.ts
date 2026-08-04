@@ -1,6 +1,7 @@
 import { sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import { effectiveSectorKb, loadPlaybooks, playbookPdfUrl, savePlaybooks } from "@/lib/pipeline/sectorStore";
 import { isSectorSlug, mergePlaybooks, type SectorPlaybook } from "@/lib/pipeline/sectors";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Sector Playbooks config API (Sector Playbooks tab). GET returns each sector's
 // category keywords and its knowledge-base status (uploaded markdown, or the
@@ -59,6 +60,10 @@ export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, mode: "demo", playbooks: [], error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "playbooks.view");
+  if (!guard.ok) return guardResponse(guard);
+
   return Response.json(await state());
 }
 
@@ -66,6 +71,9 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "playbooks.manage");
+  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

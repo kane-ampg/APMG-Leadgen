@@ -6,6 +6,7 @@ import {
   saveComposePrompt,
   type ComposePromptConfig,
 } from "@/lib/ai/composeStore";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Email Composer config API (Email Composer tab). GET returns the current prompt
 // config (saved row, or in-code defaults) plus the code defaults for a "reset";
@@ -46,6 +47,10 @@ export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "composer.view");
+  if (!guard.ok) return guardResponse(guard);
+
   return Response.json(await state());
 }
 
@@ -53,6 +58,9 @@ export async function PUT(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "composer.view");
+  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

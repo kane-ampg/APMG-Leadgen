@@ -81,7 +81,11 @@ export function roleCan(role: Role, permission: Permission): boolean {
   return permissionsForRole(role).includes(permission);
 }
 
-/** Roles a UI may currently assign — excludes reserved/disabled roles (sales). */
+/** Roles a UI may currently assign — every role whose catalog entry has
+ *  `enabled: true`. Nothing is disabled today (including `sales`, despite
+ *  earlier phases treating it as reserved), so this currently returns the
+ *  whole catalog; the filter exists for the day a role is defined but not
+ *  yet meant to be offered. */
 export function assignableRoles(): Role[] {
   return (Object.keys(ROLES) as Role[]).filter((r) => ROLES[r].enabled);
 }

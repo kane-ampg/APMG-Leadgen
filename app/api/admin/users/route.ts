@@ -71,6 +71,14 @@ export async function PATCH(req: Request): Promise<Response> {
   if (!isRole(raw.role)) {
     return json({ error: "Unknown role." }, 400);
   }
+  // isRole only proves the value is a real role in the catalog; assignableRoles()
+  // is the separate business rule for which of those roles a UI may currently
+  // hand out. Every role is enabled today, so this can't yet reject anything --
+  // but this route claims to be the enforcement point, and must not defer that
+  // rule to the UI even while the rule is dormant.
+  if (!assignableRoles().includes(raw.role)) {
+    return json({ error: "That role is not currently assignable." }, 400);
+  }
   const email = raw.email.trim().toLowerCase();
   const nextRole = raw.role;
 
@@ -81,6 +89,15 @@ export async function PATCH(req: Request): Promise<Response> {
     return json({ error: "That address is not a console user yet. They must sign in once first." }, 404);
   }
 
+  // Read-then-act snapshot, not a transaction: two admins racing to demote
+  // each other could both read an admin count of 2 and both pass this check.
+  // Accepted rather than adding a transaction, because the invariant this
+  // guards -- "at least one admin exists" -- doesn't actually depend on it:
+  // MAIN_ADMIN_EMAIL can never be demoted by any path (the main-admin rule
+  // above), and supabase/app-users.sql reseeds it to admin on every run. So
+  // there is always at least one admin regardless of what this check does --
+  // it's a courtesy that produces a clear message in the common case, not the
+  // guarantee.
   const denial = denyRoleChange({
     actorEmail: guard.email,
     targetEmail: email,

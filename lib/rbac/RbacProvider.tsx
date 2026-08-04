@@ -28,7 +28,9 @@ const RbacContext = createContext<RbacValue | null>(null);
 
 /**
  * Provides the current user's role + permission checks. `initialRole` is the
- * server-resolved session role (defaults to admin until Supabase auth lands).
+ * server-resolved session role, defaulting to `DEFAULT_ROLE` ("pending") when
+ * none is supplied. Supabase-backed roles are live; a session that failed to
+ * resolve one must get no access, never admin.
  * In dev only, a persisted override lets you preview other roles — unless
  * `locked` (a real signed-in session): then the session role is final and the
  * role preview is disabled, so a sales rep can never see the admin console.

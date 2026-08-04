@@ -5,6 +5,7 @@ vi.mock("server-only", () => ({}));
 const listUsers = vi.fn();
 const setUserRole = vi.fn();
 const requirePermission = vi.fn();
+const assignableRoles = vi.fn();
 
 vi.mock("@/lib/auth/userStore", () => ({
   listUsers: (...a: unknown[]) => listUsers(...a),
@@ -19,8 +20,20 @@ vi.mock("@/lib/rbac/server", async (importOriginal) => {
   };
 });
 
+// isRole (and everything else) stays the real implementation -- the
+// "constructor" test below depends on the real own-property check. Only
+// assignableRoles is overridable, and only so the dormant-catalog test can
+// simulate a role that would fail assignableRoles() without one existing yet.
+vi.mock("@/lib/rbac/roles", async (importOriginal) => {
+  const actual = (await importOriginal()) as Record<string, unknown>;
+  return {
+    ...actual,
+    assignableRoles: (...a: unknown[]) => assignableRoles(...a),
+  };
+});
+
 import { MAIN_ADMIN_EMAIL } from "@/lib/auth/policy";
-import { PATCH } from "./route";
+import { GET, PATCH } from "./route";
 
 const ACTOR = "boss@apmgservices.com.au";
 
@@ -33,6 +46,11 @@ function patch(body: unknown): Request {
   });
 }
 
+/** A GET request the sameOrigin floor will accept (no Origin header). */
+function get(): Request {
+  return new Request("http://local/api/admin/users", { method: "GET" });
+}
+
 function row(email: string, role: string) {
   return { email, name: null, picture_url: null, role, created_at: "", last_login_at: null };
 }
@@ -41,6 +59,43 @@ beforeEach(() => {
   vi.clearAllMocks();
   requirePermission.mockResolvedValue({ ok: true, role: "admin", email: ACTOR });
   setUserRole.mockResolvedValue("ok");
+  // Matches the real catalog today (every role in lib/rbac/roles.ts is
+  // enabled: true) so existing PATCH behavior is unchanged by this mock.
+  assignableRoles.mockReturnValue(["admin", "client", "sales", "pending"]);
+});
+
+describe("GET /api/admin/users", () => {
+  it("refuses a caller without users.manage", async () => {
+    requirePermission.mockResolvedValue({ ok: false, status: 403, error: "nope" });
+    const res = await GET(get());
+    expect(res.status).toBe(403);
+    expect(listUsers).not.toHaveBeenCalled();
+  });
+
+  it("returns the roster and the acting admin's own email for a permitted caller", async () => {
+    const users = [row(MAIN_ADMIN_EMAIL, "admin"), row(ACTOR, "admin")];
+    listUsers.mockResolvedValue(users);
+    const res = await GET(get());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // actorEmail is what the UI uses to disable the acting admin's own row --
+    // it must come from the session (the guard), not be invented by the route.
+    expect(body.actorEmail).toBe(ACTOR);
+    expect(body.mainAdminEmail).toBe(MAIN_ADMIN_EMAIL);
+    expect(body.assignableRoles).toEqual(["admin", "client", "sales", "pending"]);
+    expect(body.users).toEqual(users);
+    // Deliberately not asserting on `mode`/`canPersist`: those come from the
+    // real (unmocked) supabaseTarget(), which resolves to demo in this test
+    // environment. Mocking lib/pipeline/server just to pin those two fields
+    // would weaken the test for no real coverage gain, so they're left alone.
+  });
+
+  it("returns 200 with an empty roster rather than treating it as an error", async () => {
+    listUsers.mockResolvedValue([]);
+    const res = await GET(get());
+    expect(res.status).toBe(200);
+    expect((await res.json()).users).toEqual([]);
+  });
 });
 
 describe("PATCH /api/admin/users — authorization", () => {
@@ -109,6 +164,20 @@ describe("PATCH /api/admin/users — validation", () => {
   it("rejects a role that is an inherited object property", async () => {
     // isRole must be an own-property check; "constructor" must not pass.
     const res = await PATCH(patch({ email: "nicole@apmgservices.com.au", role: "constructor" }));
+    expect(res.status).toBe(400);
+    expect(setUserRole).not.toHaveBeenCalled();
+  });
+
+  it("rejects a role that isRole() accepts but assignableRoles() excludes", async () => {
+    // Every role in lib/rbac/roles.ts is enabled: true today, so this branch
+    // is currently unreachable through the real catalog -- there is no role
+    // that passes isRole() and fails assignableRoles(). This test forces that
+    // combination via the assignableRoles mock (see module setup above) so
+    // the route's own enforcement of the business rule -- not just the type
+    // check -- is locked in for the day a role is disabled, rather than
+    // pretending the real catalog can exercise it yet.
+    assignableRoles.mockReturnValue(["admin", "client", "pending"]); // "sales" excluded
+    const res = await PATCH(patch({ email: "nicole@apmgservices.com.au", role: "sales" }));
     expect(res.status).toBe(400);
     expect(setUserRole).not.toHaveBeenCalled();
   });

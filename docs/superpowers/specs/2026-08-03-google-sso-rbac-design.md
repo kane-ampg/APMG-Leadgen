@@ -157,6 +157,18 @@ New `lib/auth/google.ts` holding the endpoints and claim validation, plus:
   then bounces them to a look-alike host, arriving with the credibility of a real
   login. Anything failing validation falls back to `/`.
 
+  **A leading-`//` check alone is not sufficient**, and the first version of this
+  spec was wrong to imply it was. WHATWG URL parsers — every browser, and Node's
+  `URL` — strip TAB, CR and LF from *anywhere* in a string before interpreting
+  its structure, so `/\t/evil.example` passes a naive check and then resolves to
+  `//evil.example`. Verified: `new URL("/\t/evil.example", "https://good.example")
+  .host === "evil.example"`, reachable through an ordinary percent-encoded query
+  param. The guard therefore **rejects the entire control-character class
+  (`U+0000`–`U+001F` and `U+007F`) outright** rather than stripping and re-checking:
+  refusing the class cannot be reopened by a parser quirk we failed to anticipate,
+  whereas an emulated strip-list can. No legitimate in-app path contains these
+  characters.
+
 **`GET /api/auth/google/callback`**
 - Rejects unless the `state` query param equals the `state` cookie (CSRF).
 - Exchanges `code` + `code_verifier` at `https://oauth2.googleapis.com/token`.

@@ -1,16 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import Image from "next/image";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { MessageCircle, X, Send, Loader2 } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { track } from "@/lib/telemetry";
 import { COMPANY } from "@/lib/legal/company";
 import { MAX_MESSAGE_CHARS, MAX_HISTORY_MESSAGES } from "@/lib/portal/chatLimits";
-// Chathead for assistant turns — same self-hosted headshot the team roster uses
-// (see TeamSection), so it's static-imported and optimised, not a CDN hotlink.
-import simon from "@/app/team/simon-taranek.jpg";
 
 /**
  * Customer-facing chat bubble for the public /portal (ui-standards §17.8 signal
@@ -25,10 +21,6 @@ import simon from "@/app/team/simon-taranek.jpg";
  *    opened/closed it this session (sessionStorage).
  *  - HONESTY: the panel is labelled as an automated assistant (never passed
  *    off as a person) and always offers the phone number as the human path.
- *    Assistant turns carry a chathead (Simon's headshot) for warmth, but the
- *    header keeps the "Automated" label — the face is decoration beside an
- *    explicit disclosure, not a claim that a person is typing. The floating
- *    launcher stays a plain message icon on purpose.
  *  - Talks to /api/portal/chat, which is KB-grounded, rate-limited, and spends a
  *    walled-off key (see the route). The client keeps only the last few turns and
  *    caps input length to match the server's guardrails.
@@ -45,28 +37,6 @@ const AUTO_OPEN_MS = 30_000;
 const SEEN_KEY = "apmg-portal-chat-seen";
 
 type Msg = { role: "user" | "assistant"; content: string };
-
-/** Assistant-side chathead in the transcript. Purely decorative — the honest
- *  "APMG Assistant · Automated" label in the header is what identifies the
- *  speaker, so this carries no alt text and is hidden from screen readers. */
-function ChatHead() {
-  return (
-    <Image
-      src={simon}
-      alt=""
-      aria-hidden
-      width={28}
-      height={28}
-      sizes="28px"
-      className="mb-0.5 h-7 w-7 shrink-0 rounded-full object-cover ring-1 ring-foreground/10"
-    />
-  );
-}
-
-/** Invisible stand-in so follow-on assistant bubbles keep the chathead's indent. */
-function ChatHeadSpacer() {
-  return <span aria-hidden className="mb-0.5 h-7 w-7 shrink-0" />;
-}
 
 const GREETING: Msg = {
   role: "assistant",
@@ -227,46 +197,36 @@ export function PortalChat() {
               ref={scrollRef}
               className="flex-1 space-y-3 overflow-y-auto px-4 py-4"
             >
-              {messages.map((m, i) => {
-                const isUser = m.role === "user";
-                // Chathead leads the first turn of each assistant run only —
-                // repeating the face down a whole column is clutter. Later
-                // turns in the run get an invisible spacer so their bubbles
-                // stay on the same left edge.
-                const leadsRun = !isUser && messages[i - 1]?.role !== "assistant";
-                return (
-                  <motion.div
-                    key={i}
-                    initial={reduce ? false : { opacity: 0, y: 6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: reduce ? 0 : 0.24, ease: EASE }}
+              {messages.map((m, i) => (
+                <motion.div
+                  key={i}
+                  initial={reduce ? false : { opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: reduce ? 0 : 0.24, ease: EASE }}
+                  className={cn(
+                    "flex",
+                    m.role === "user" ? "justify-end" : "justify-start",
+                  )}
+                >
+                  <span
                     className={cn(
-                      "flex items-end gap-2",
-                      isUser ? "justify-end" : "justify-start",
+                      "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-[13px] leading-relaxed",
+                      m.role === "user"
+                        ? "rounded-br-sm bg-primary text-primary-foreground"
+                        : "rounded-bl-sm bg-muted text-foreground",
                     )}
                   >
-                    {!isUser && (leadsRun ? <ChatHead /> : <ChatHeadSpacer />)}
-                    <span
-                      className={cn(
-                        "max-w-[85%] whitespace-pre-wrap break-words rounded-2xl px-3 py-2 text-[13px] leading-relaxed",
-                        isUser
-                          ? "rounded-br-sm bg-primary text-primary-foreground"
-                          : "rounded-bl-sm bg-muted text-foreground",
-                      )}
-                    >
-                      {m.content}
-                    </span>
-                  </motion.div>
-                );
-              })}
+                    {m.content}
+                  </span>
+                </motion.div>
+              ))}
 
               {sending && (
                 <motion.div
                   initial={reduce ? false : { opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="flex items-end justify-start gap-2"
+                  className="flex justify-start"
                 >
-                  <ChatHead />
                   <span className="inline-flex items-center gap-2 rounded-2xl rounded-bl-sm bg-muted px-3 py-2 text-[13px] text-muted-foreground">
                     <Loader2 className={cn("h-3.5 w-3.5", !reduce && "animate-spin")} aria-hidden />
                     Typing…

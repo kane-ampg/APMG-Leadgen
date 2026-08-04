@@ -2,6 +2,7 @@ import { deleteObject, sameOrigin, SECTOR_ASSETS_BUCKET, uploadObject } from "@/
 import { compressPdfForGmail } from "@/lib/pipeline/pdfCompress";
 import { loadPlaybooks, savePlaybooks } from "@/lib/pipeline/sectorStore";
 import { isSectorSlug, mergePlaybooks } from "@/lib/pipeline/sectors";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Upload / remove the attachment PDF for one sector (Sector Playbooks tab). The
 // bytes go to the public `sector-assets` Storage bucket at "<slug>.pdf" (upsert,
@@ -10,9 +11,6 @@ import { isSectorSlug, mergePlaybooks } from "@/lib/pipeline/sectors";
 // The send flow resolves a lead's Category → this sector → the PDF's public URL
 // and passes it to n8n, whose Gmail node downloads + attaches it. Server-side;
 // keeps the service role key off the browser.
-//
-// SECURITY — TODO: same-origin (CSRF) floor only; gate on `playbooks.manage`
-// once auth lands.
 export const runtime = "nodejs";
 
 // Accept uploads up to 50 MB *decimal* (50,000,000 B) — the Storage bucket's
@@ -40,6 +38,9 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "playbooks.manage");
+  if (!guard.ok) return guardResponse(guard);
 
   let form: FormData;
   try {
@@ -124,6 +125,9 @@ export async function DELETE(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "playbooks.manage");
+  if (!guard.ok) return guardResponse(guard);
 
   const slug = new URL(req.url).searchParams.get("slug") ?? "";
   if (!isSectorSlug(slug)) {

@@ -5,6 +5,7 @@ import {
   portalAdminAuthorized,
   type PortalEventRow,
 } from "@/lib/portal/server";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 import {
   isMarkerKind,
   MARKER_EVENT,
@@ -198,6 +199,11 @@ function gate(req: Request): { base: string; key: string } | Response {
 }
 
 export async function GET(req: Request): Promise<Response> {
+  if (!sameOrigin(req)) return json({ ok: false, error: "Forbidden." }, 403);
+
+  const guard = await requirePermission(req, "hotleads.handoff");
+  if (!guard.ok) return guardResponse(guard);
+
   const target = gate(req);
   if (target instanceof Response) return target;
 
@@ -207,9 +213,12 @@ export async function GET(req: Request): Promise<Response> {
 }
 
 export async function POST(req: Request): Promise<Response> {
-  const target = gate(req);
-  if (target instanceof Response) return target;
+  if (!sameOrigin(req)) return json({ ok: false, error: "Forbidden." }, 403);
 
+  // Parsed before authorising: the permission this action needs DEPENDS on
+  // `kind`, which only exists in the body. Safe ordering — parsing has no
+  // side effect, and the guard below still runs before `gate()` and before
+  // any Supabase read or write.
   let body: unknown;
   try {
     body = await req.json();
@@ -217,7 +226,19 @@ export async function POST(req: Request): Promise<Response> {
     return json({ ok: false, error: "Invalid JSON body." }, 400);
   }
   const raw = (body ?? {}) as { leadIds?: unknown; kind?: unknown; note?: unknown };
+  // Two audiences, two permissions. "returned" is the REP-facing "send back to
+  // admin" action (SalesProvider.tsx's returnLeads(), whose button is gated
+  // client-side on `leads.contact` — which `sales` holds); "handoff" and
+  // "archived" are ADMIN-only staging actions driven from the Hot Leads page.
+  // An absent/invalid kind defaults to "handoff" (unchanged from before), so it
+  // must fail closed to the admin-only permission, not the rep-facing one.
   const kind: MarkerKind = isMarkerKind(raw.kind) ? raw.kind : "handoff";
+  const guard = await requirePermission(req, kind === "returned" ? "leads.contact" : "hotleads.handoff");
+  if (!guard.ok) return guardResponse(guard);
+
+  const target = gate(req);
+  if (target instanceof Response) return target;
+
   // Optional, and only meaningful on a return: the rep's reason for sending the
   // lead back ("already a client of ours"). Trimmed and capped.
   const note =
@@ -293,13 +314,22 @@ export async function POST(req: Request): Promise<Response> {
 }
 
 export async function DELETE(req: Request): Promise<Response> {
-  const target = gate(req);
-  if (target instanceof Response) return target;
+  if (!sameOrigin(req)) return json({ ok: false, error: "Forbidden." }, 403);
 
+  // Same kind-dependent permission as POST (see its comment above) — a rep
+  // must be able to undo their OWN "returned" mark, but not touch the
+  // admin-only handoff/archive ledgers. Query-string parsing has no side
+  // effect, so this still runs before `gate()` and before any database call.
   const params = new URL(req.url).searchParams;
   const leadId = params.get("leadId");
   const kindParam = params.get("kind");
   const kind: MarkerKind = isMarkerKind(kindParam) ? kindParam : "handoff";
+  const guard = await requirePermission(req, kind === "returned" ? "leads.contact" : "hotleads.handoff");
+  if (!guard.ok) return guardResponse(guard);
+
+  const target = gate(req);
+  if (target instanceof Response) return target;
+
   // isUuid also makes the eq. interpolation safe (uuids never need quoting).
   if (!isUuid(leadId)) return json({ ok: false, error: "A valid lead id is required." }, 400);
 

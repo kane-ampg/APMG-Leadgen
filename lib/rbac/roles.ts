@@ -3,11 +3,8 @@ import { ALL_PERMISSIONS, type Permission } from "./permissions";
 /**
  * A role is a named bundle of permissions — nothing more. Enforcement checks
  * permissions, so new roles are pure data and need no logic changes.
- *
- * `sales` is defined (so enforcement is ready the day it's switched on) but
- * marked `enabled: false` — it is reserved and not yet assignable.
  */
-export type Role = "admin" | "client" | "sales";
+export type Role = "admin" | "client" | "sales" | "pending";
 
 export interface RoleDef {
   label: string;
@@ -48,13 +45,31 @@ export const ROLES: Record<Role, RoleDef> = {
       "enquiries.manage",
     ],
   },
+  pending: {
+    label: "Pending",
+    description:
+      "Signed in, but no access yet — an admin must grant a role. This is where every auto-admitted Workspace account lands.",
+    enabled: true,
+    permissions: [],
+  },
 };
 
-/** Fallback role when no session is present (internal console default). */
-export const DEFAULT_ROLE: Role = "admin";
+/** Fallback role when no session is present. Deliberately powerless: a code
+ *  path that cannot resolve a role must grant nothing, not everything. */
+export const DEFAULT_ROLE: Role = "pending";
 
+/**
+ * Runtime type guard for `Role`. Deliberately an own-property check
+ * (`Object.hasOwn`), NOT the `in` operator — `in` walks the prototype chain,
+ * so inherited `Object.prototype` members like `"constructor"`, `"toString"`,
+ * `"__proto__"`, `"hasOwnProperty"`, and `"valueOf"` would all satisfy
+ * `value in ROLES` despite never being assigned as roles. This guard
+ * validates the `viewAs` claim out of a signed-but-attacker-influenced JWT
+ * payload (see lib/auth/session.ts), so the distinction is a security
+ * boundary, not a style preference — do not "simplify" this back to `in`.
+ */
 export function isRole(value: unknown): value is Role {
-  return typeof value === "string" && value in ROLES;
+  return typeof value === "string" && Object.hasOwn(ROLES, value);
 }
 
 export function permissionsForRole(role: Role): readonly Permission[] {
@@ -66,7 +81,11 @@ export function roleCan(role: Role, permission: Permission): boolean {
   return permissionsForRole(role).includes(permission);
 }
 
-/** Roles a UI may currently assign — excludes reserved/disabled roles (sales). */
+/** Roles a UI may currently assign — every role whose catalog entry has
+ *  `enabled: true`. Nothing is disabled today (including `sales`, despite
+ *  earlier phases treating it as reserved), so this currently returns the
+ *  whole catalog; the filter exists for the day a role is defined but not
+ *  yet meant to be offered. */
 export function assignableRoles(): Role[] {
   return (Object.keys(ROLES) as Role[]).filter((r) => ROLES[r].enabled);
 }

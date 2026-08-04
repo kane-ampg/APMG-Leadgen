@@ -35,6 +35,3 @@ next-env.d.ts
 
 .vercel
 .env*
-
-# Google OAuth client secret downloads (contains client_secret) — never commit
-client_secret_*.json

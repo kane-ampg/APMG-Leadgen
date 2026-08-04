@@ -1,6 +1,7 @@
 import { bestEmail } from "@/lib/pipeline/campaign";
 import { isUuid, sameOrigin, supabaseTarget } from "@/lib/pipeline/server";
 import { isMissingPortalTable } from "@/lib/portal/server";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 import { HANDOFF_EVENT } from "@/lib/sales/handoff";
 import type { SalesQueueResponse, SalesQueueRow } from "@/lib/sales/queue";
 
@@ -144,6 +145,9 @@ export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return json({ ok: false, error: "Forbidden." }, 403);
   }
+
+  const guard = await requirePermission(req, "sales.view");
+  if (!guard.ok) return guardResponse(guard);
 
   const params = new URL(req.url).searchParams;
   const page = Math.max(1, Math.floor(Number(params.get("page")) || 1));

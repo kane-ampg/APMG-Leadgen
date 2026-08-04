@@ -6,16 +6,13 @@ import {
   MAX_VERSION_LEN,
   type LegalDocs,
 } from "@/lib/legal/legalDocs";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Legal Documents config API (Legal Documents tab). GET returns the current
 // published terms/privacy + version (or in-code placeholder); PUT saves the
 // edited docs to app_settings (SETTING_LEGAL_DOCS). The public portal reads the
 // same value via /api/portal/legal to show customers the exact text they agree
 // to, and the enquiry route pins/validates the version before storing PII.
-//
-// SECURITY — TODO before exposing publicly: same-origin (CSRF) floor only, NOT
-// real auth. Gate on `legal.view` (read) / `legal.manage` (write) here once auth
-// lands — this publishes the policy customers are held to.
 export const runtime = "nodejs";
 
 const MAX_DOC_CHARS = 60_000;
@@ -43,6 +40,10 @@ export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "legal.view");
+  if (!guard.ok) return guardResponse(guard);
+
   return Response.json(await state());
 }
 
@@ -50,6 +51,9 @@ export async function PUT(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "legal.manage");
+  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

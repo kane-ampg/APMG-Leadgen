@@ -1,4 +1,5 @@
 import { isMissingBatchColumn, sameOrigin, supabaseTarget, UNGROUPED } from "@/lib/pipeline/server";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Lists the import "folders" (distinct batch values) with a count + latest time.
 // PostgREST grouping is finicky across versions, so we fetch the (small) batch
@@ -22,6 +23,9 @@ export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, mode: "live", batches: [], error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "pipeline.view");
+  if (!guard.ok) return guardResponse(guard);
 
   const target = supabaseTarget();
   if (target.state === "demo") {

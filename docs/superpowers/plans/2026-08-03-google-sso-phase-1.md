@@ -1603,6 +1603,8 @@ lead database, and that passes when the Origin header is absent."
 - Modify: `components/apmg/Sidebar.tsx:17-18,31-32,286-328`
 - Modify: `components/apmg/DashboardShell.tsx` (user prop type only)
 - Modify: `components/apmg/OverviewPage.tsx:11,161,294,305,384` (user prop type only)
+- Create: `lib/themeBootstrap.ts` — the pure bootstrap builder, outside the `"use client"` boundary
+- Modify: `lib/theme.ts` — import the shared key/type from the new module; drop the now-dead `THEME_BOOTSTRAP`
 
 **Interfaces:**
 - Consumes: `/api/auth/google/start` (Task 5); `resolveSession` (Task 6); `THEME_SEED_COOKIE` (Task 4); `themeBootstrap` from `lib/theme.ts`
@@ -1841,13 +1843,79 @@ Also remove the hardcoded `?? "KR"` / `?? "Kane Reroma"` / `?? "kane@apmgservice
 
 - [ ] **Step 7: Seed the theme from the cookie**
 
-`app/layout.tsx` currently imports `THEME_BOOTSTRAP` (line 3), is a **synchronous** component (line 27), and hardcodes `dark` in the `<html>` className (line 35). All three change.
+> **Read this before editing `app/layout.tsx`.** `lib/theme.ts` begins with
+> `"use client"`. `RootLayout` is a Server Component, and a Server Component may
+> not call a function that lives behind a client boundary — doing so throws at
+> request time on **every route**, a total site outage. Neither `tsc --noEmit`
+> nor `next build` catches it, because these routes are server-rendered on
+> demand and the build never executes them; only a real HTTP request does. So
+> the pure part of the theme module has to come out from behind that boundary
+> first.
+
+**7a — extract the pure bootstrap.** Create `lib/themeBootstrap.ts` with **no**
+`"use client"` directive, holding only the pure string builder and the key it
+references — no hooks, no DOM access, importable from both sides:
+
+```ts
+/**
+ * Deliberately NOT a client module. The root layout is a Server Component and
+ * cannot call into a `"use client"` file, so the pure bootstrap builder lives
+ * here while the hooks that genuinely need the browser stay in lib/theme.ts.
+ */
+
+export type Theme = "dark" | "light";
+
+/** localStorage key holding the user's explicit choice, which always wins. */
+export const THEME_STORAGE_KEY = "apmg-theme";
+
+/**
+ * Inline script string injected before paint so the persisted theme (or the
+ * given fallback) is applied with no flash of the wrong one.
+ *
+ * The operator console defaults to dark (ui-standards §4.2). The Sales desk
+ * defaults to LIGHT — reps work it in daylight, often on a phone, and dark
+ * chrome under glare is the first thing to cost legibility. Either way an
+ * explicit choice from the toggle is stored and always wins from then on, so
+ * the fallback only ever decides the very first visit.
+ */
+export function themeBootstrap(fallback: Theme = "dark"): string {
+  return (
+    `(function(){try{` +
+    `var t=localStorage.getItem('${THEME_STORAGE_KEY}');` +
+    `if(t!=='light'&&t!=='dark'){t='${fallback}';}` +
+    `var r=document.documentElement;` +
+    `r.classList.toggle('dark',t==='dark');r.style.colorScheme=t;` +
+    `}catch(e){` +
+    `document.documentElement.classList.toggle('dark','${fallback}'==='dark');` +
+    `}})();`
+  );
+}
+```
+
+**7b — slim `lib/theme.ts` down.** Delete its local `STORAGE_KEY`, its `Theme`
+type, its `themeBootstrap` function and the now-dead `THEME_BOOTSTRAP` constant
+(nothing imports it once the layout calls `themeBootstrap(seed)` — verify with
+`grep -rn "THEME_BOOTSTRAP" app lib components`). Import what it still needs
+instead, keeping the `"use client"` directive and the hooks:
+
+```ts
+import { THEME_STORAGE_KEY, type Theme } from "@/lib/themeBootstrap";
+```
+
+Replace the remaining `STORAGE_KEY` references in `useTheme` and
+`seedThemeForRole` with `THEME_STORAGE_KEY`, and re-export the type for existing
+consumers if any rely on it: `export type { Theme };`
+
+`app/portal/layout.tsx:5` mentions `THEME_BOOTSTRAP` in a comment — update that
+prose to say `themeBootstrap` so the reference is not left dangling.
+
+**7c — wire the layout.** `app/layout.tsx` currently imports `THEME_BOOTSTRAP` (line 3), is a **synchronous** component (line 27), and hardcodes `dark` in the `<html>` className (line 35). All three change.
 
 Replace the import on line 3:
 
 ```tsx
 import { cookies } from "next/headers";
-import { themeBootstrap } from "@/lib/theme";
+import { themeBootstrap } from "@/lib/themeBootstrap";
 import { THEME_SEED_COOKIE } from "@/lib/auth/session";
 ```
 
@@ -1877,10 +1945,32 @@ And use the seeded bootstrap in the inline script, leaving the long comment abov
         <script dangerouslySetInnerHTML={{ __html: themeBootstrap(seed) }} />
 ```
 
-- [ ] **Step 8: Typecheck and build**
+- [ ] **Step 8: Typecheck, build, AND actually serve a request**
 
 Run: `npx tsc --noEmit && npx next build`
 Expected: both clean — this is the point at which all the fallout from deleting `lib/auth/users.ts` is resolved. If either fails, the task is not done; fix before committing.
+
+**A green build is not sufficient evidence here, and this step is where that was
+learned the hard way.** The client-boundary violation described in Step 7 passes
+both `tsc` and `next build` and still 500s every route, because these pages are
+server-rendered on demand and the build never executes them. So also start the
+dev server and fetch real pages before you believe it:
+
+```bash
+npm run dev &
+# wait for "Ready", then:
+curl -s -o /dev/null -w '%{http_code} /\n'       http://localhost:3000/
+curl -s -o /dev/null -w '%{http_code} /login\n'  http://localhost:3000/login
+curl -s -o /dev/null -w '%{http_code} /portal\n' http://localhost:3000/portal
+```
+
+All three must be `200` (or a `3xx` for `/` once the Task 7 gate exists). Any
+`500` means a runtime boundary or import error the static gates cannot see. Check
+the dev-server output for the stack trace, and stop the server when done.
+
+> Port note: another project on this machine may already hold port 3000. If Next
+> reports it is using a different port, use that port in the curls rather than
+> assuming 3000 — and do not kill the other process.
 
 - [ ] **Step 9: Verify end to end**
 
@@ -1898,7 +1988,8 @@ One commit for the whole swap — the tree never compiles without both halves.
 ```bash
 git add app/login/page.tsx lib/auth/users.ts app/page.tsx app/layout.tsx \
         components/apmg/PendingAccess.tsx components/apmg/Sidebar.tsx \
-        components/apmg/DashboardShell.tsx components/apmg/OverviewPage.tsx
+        components/apmg/DashboardShell.tsx components/apmg/OverviewPage.tsx \
+        lib/theme.ts lib/themeBootstrap.ts
 git commit -m "Make Google the only sign-in path and wire the session in
 
 Deletes the hardcoded user list and the shared plaintext password,

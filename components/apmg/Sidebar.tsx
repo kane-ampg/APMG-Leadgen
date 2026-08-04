@@ -57,7 +57,7 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
   const salesBadge = salesQueueTotal > 0 ? formatInt(salesQueueTotal) : undefined;
   // Hot Leads badge = leads scoring above the hot cut-off that HAVEN'T been
   // handed to Sales yet — a work queue, so it's hidden once it's cleared.
-  const hotWaiting = useHotLeadsWaiting();
+  const hotWaiting = useHotLeadsWaiting(can("hotleads.view"));
   const hotBadge = hotWaiting > 0 ? formatInt(hotWaiting) : undefined;
   const ref = useRef<HTMLElement>(null);
   // Trap focus inside the drawer while it's open as a mobile overlay.

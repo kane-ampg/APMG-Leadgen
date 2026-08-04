@@ -18,10 +18,15 @@ export default async function Page() {
   if (!session) return <PendingAccess email="unknown" />;
   if (session.role === "pending") return <PendingAccess email={session.email} />;
 
-  const name = session.email.split("@")[0].replace(/[._]/g, " ");
+  // Prefer the Google-provided display name carried in the session cookie;
+  // fall back to an email-derived name for a session minted before this
+  // field existed, or a Google account with no name claim.
+  const emailLocal = session.email.split("@")[0].replace(/[._]/g, " ");
+  const fallbackName = emailLocal.charAt(0).toUpperCase() + emailLocal.slice(1);
+  const name = session.name?.trim() || fallbackName;
   const user = {
     email: session.email,
-    name: name.charAt(0).toUpperCase() + name.slice(1),
+    name,
     initials: initialsFor(name, session.email),
   };
 

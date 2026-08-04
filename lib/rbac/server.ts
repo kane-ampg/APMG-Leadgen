@@ -20,6 +20,10 @@ export interface ResolvedSession {
   trueRole: Role;
   /** What enforcement should use — differs only during an authorised view-as. */
   role: Role;
+  /** Display name from the Google profile, carried in the session cookie.
+   *  Display-only — never used for authorization. Absent for sessions minted
+   *  before this field existed, or a Google account with no name claim. */
+  name?: string;
 }
 
 export async function resolveSession(req: Request): Promise<ResolvedSession | null> {
@@ -53,6 +57,7 @@ export async function resolveSession(req: Request): Promise<ResolvedSession | nu
     email: claims.email,
     trueRole,
     role: effectiveRole(trueRole, claims.viewAs ?? null),
+    name: claims.name,
   };
 }
 

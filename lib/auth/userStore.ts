@@ -116,3 +116,93 @@ export async function upsertOnLogin(u: {
   // — so a blip costs a dark theme, not an account.
   return getUserRole(email);
 }
+
+export interface AppUserRow {
+  email: string;
+  name: string | null;
+  picture_url: string | null;
+  role: Role;
+  created_at: string;
+  last_login_at: string | null;
+}
+
+/**
+ * Every console user, most-recent sign-in first. Rows whose stored role is not
+ * in the catalog are coerced to `pending` rather than dropped — an operator
+ * needs to SEE a row with a bad role in order to fix it, and hiding it would
+ * make the account invisible while it still exists.
+ */
+export async function listUsers(): Promise<AppUserRow[]> {
+  const target = supabaseTarget();
+  if (target.state !== "ok") return [];
+  try {
+    const res = await fetch(
+      `${target.base}/rest/v1/${TABLE}?select=email,name,picture_url,role,created_at,last_login_at&order=last_login_at.desc.nullslast`,
+      { headers: authHeaders(target.key), cache: "no-store" },
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      console.error(`[auth] app_users list ${res.status}:`, detail.slice(0, 500));
+      return [];
+    }
+    const rows = (await res.json().catch(() => [])) as unknown;
+    if (!Array.isArray(rows)) return [];
+    return rows.map((r) => {
+      const row = r as Record<string, unknown>;
+      return {
+        email: typeof row.email === "string" ? row.email : "",
+        name: typeof row.name === "string" ? row.name : null,
+        picture_url: typeof row.picture_url === "string" ? row.picture_url : null,
+        role: isRole(row.role) ? row.role : "pending",
+        created_at: typeof row.created_at === "string" ? row.created_at : "",
+        last_login_at: typeof row.last_login_at === "string" ? row.last_login_at : null,
+      };
+    }).filter((r) => r.email !== "");
+  } catch (e) {
+    console.error("[auth] app_users list failed:", e);
+    return [];
+  }
+}
+
+/**
+ * Change one user's role.
+ *
+ * Callers MUST have run `denyRoleChange` first — this function deliberately
+ * enforces nothing, so that every lockout rule lives in exactly one tested
+ * place instead of being half-checked in two.
+ *
+ * Returns "missing" when the filter matched no row, which is why the PATCH uses
+ * `return=representation`: a silent no-op on a typo'd address would otherwise
+ * look identical to success.
+ */
+export async function setUserRole(
+  email: string,
+  role: Role,
+): Promise<"ok" | "demo" | "missing" | "error"> {
+  const target = supabaseTarget();
+  if (target.state !== "ok") return "demo";
+  try {
+    const res = await fetch(
+      `${target.base}/rest/v1/${TABLE}?email=eq.${encodeURIComponent(email.trim().toLowerCase())}`,
+      {
+        method: "PATCH",
+        headers: {
+          ...authHeaders(target.key),
+          "Content-Type": "application/json",
+          Prefer: "return=representation",
+        },
+        body: JSON.stringify({ role }),
+      },
+    );
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      console.error(`[auth] app_users role update ${res.status}:`, detail.slice(0, 500));
+      return "error";
+    }
+    const rows = (await res.json().catch(() => [])) as unknown;
+    return Array.isArray(rows) && rows.length > 0 ? "ok" : "missing";
+  } catch (e) {
+    console.error("[auth] app_users role update failed:", e);
+    return "error";
+  }
+}

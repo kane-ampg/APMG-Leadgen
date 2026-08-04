@@ -13,10 +13,6 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // edited docs to app_settings (SETTING_LEGAL_DOCS). The public portal reads the
 // same value via /api/portal/legal to show customers the exact text they agree
 // to, and the enquiry route pins/validates the version before storing PII.
-//
-// SECURITY — TODO before exposing publicly: same-origin (CSRF) floor only, NOT
-// real auth. Gate on `legal.view` (read) / `legal.manage` (write) here once auth
-// lands — this publishes the policy customers are held to.
 export const runtime = "nodejs";
 
 const MAX_DOC_CHARS = 60_000;

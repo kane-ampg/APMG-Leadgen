@@ -40,10 +40,6 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // email's hero image to that service's photo; absent, n8n keeps its default
 // team photo.
 //
-// SECURITY — TODO before exposing publicly: like the other pipeline routes this
-// has only a same-origin (CSRF) floor, NOT real auth. The UI gates the action
-// behind the `campaigns.send` permission; enforce it here too once auth lands.
-//
 // After a live send, one `email_sent` row per recipient is recorded in
 // portal_events (lead_id + campaign + category) — that's what the Telemetry
 // report's "emails sent in period" numbers are built from, AND the gate that

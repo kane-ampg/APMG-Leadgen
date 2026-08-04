@@ -8,9 +8,6 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // app_settings["sector_playbooks"] mapping and overrides the repo file
 // (components/knowledgebase/<slug>.md) as the KB that grounds the outreach
 // email. Server-side (keeps the service role key off the browser).
-//
-// SECURITY — TODO: same-origin (CSRF) floor only; gate on `playbooks.manage`
-// once auth lands.
 export const runtime = "nodejs";
 
 function persistError(result: "demo" | "missing-table" | "error"): Response {

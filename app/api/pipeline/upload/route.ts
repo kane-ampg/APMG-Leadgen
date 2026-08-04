@@ -10,11 +10,6 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // Receives a batch of parsed leads from the Pipeline tool and inserts them into
 // Supabase via the PostgREST endpoint. Runs on Node (keeps the service role key
 // server-side — it is never shipped to the browser).
-//
-// SECURITY — TODO before exposing this publicly: this route writes with the
-// service-role key, which bypasses Row Level Security. It currently has only a
-// same-origin (CSRF) floor, NOT real authentication. Add a session/role check
-// here once the app has auth, or keep this instance non-public.
 export const runtime = "nodejs";
 
 const TABLE = "leads";

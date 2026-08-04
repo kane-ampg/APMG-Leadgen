@@ -29,9 +29,6 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // falls back to the deterministic template (campaign.ts demoDraft) on any miss;
 // with no key we return the template for every lead (demo mode) so the review
 // UI is fully exercisable.
-//
-// SECURITY — TODO before exposing publicly: same-origin (CSRF) floor only, NOT
-// real auth; enforce the `campaigns.send` permission here too once auth lands.
 export const runtime = "nodejs";
 // Leads are drafted through a small concurrency pool (one Claude call each) so
 // a big request still takes minutes; give serverless deploys the platform max —

@@ -8,10 +8,6 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // repo file it falls back to); POST patches one sector's name/category keywords.
 // The KB markdown itself is uploaded via the sibling /kb route. Server-side.
 // Mapping persists in app_settings["sector_playbooks"].
-//
-// SECURITY — TODO before exposing publicly: same-origin (CSRF) floor only, NOT
-// real auth; gate on `playbooks.manage` here once auth lands (this decides how
-// leads route to a sector and which KB grounds the outreach email).
 export const runtime = "nodejs";
 
 const KB_PREVIEW_CHARS = 600;

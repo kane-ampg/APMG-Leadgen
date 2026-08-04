@@ -18,10 +18,6 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 //
 // Webhook payload:  { leads: [{ id, website }] }  (≤ CHUNK_SIZE per call)
 // Webhook response: { ok, results: [{ id, website, emails, best_email }] }
-//
-// SECURITY — TODO before exposing publicly: like the other pipeline routes this
-// has only a same-origin (CSRF) floor, NOT real auth. The UI gates the action
-// behind the `campaigns.send` permission; enforce it here too once auth lands.
 export const runtime = "nodejs";
 // The finder fetches two pages per lead sequentially in n8n; a full batch can
 // take minutes — give serverless deploys the platform max.

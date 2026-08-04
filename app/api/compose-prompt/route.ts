@@ -13,10 +13,6 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // PUT upserts the overwriteable singleton (supabase/compose-prompt.sql). The
 // compose flow (app/api/pipeline/campaigns/compose) reads the same config to
 // draft each email. Server-side, service role.
-//
-// SECURITY — TODO before exposing publicly: same-origin (CSRF) floor only, NOT
-// real auth; gate on `composer.view` (read) / a manage permission (write) here
-// once auth lands — this is the literal instruction set sent to the model.
 export const runtime = "nodejs";
 
 const MAX_INSTRUCTIONS = 20_000;

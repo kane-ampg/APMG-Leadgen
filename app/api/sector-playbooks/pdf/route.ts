@@ -11,9 +11,6 @@ import { guardResponse, requirePermission } from "@/lib/rbac/server";
 // The send flow resolves a lead's Category → this sector → the PDF's public URL
 // and passes it to n8n, whose Gmail node downloads + attaches it. Server-side;
 // keeps the service role key off the browser.
-//
-// SECURITY — TODO: same-origin (CSRF) floor only; gate on `playbooks.manage`
-// once auth lands.
 export const runtime = "nodejs";
 
 // Accept uploads up to 50 MB *decimal* (50,000,000 B) — the Storage bucket's

@@ -1132,7 +1132,7 @@ Every new surface must:
 - Family: editorial
 - Sidebar: 220px wide, editorial zinc with two section dividers ('System' /
   'Security')
-- Header: editorial breadcrumb header (`Admin / Overview / kaner@simple.biz`)
+- Header: editorial breadcrumb header (`Admin / Overview / {signed-in-user-email}`)
   with three small action pills on the right (Sync, Export Audit, Roles)
 - Body: hairline panels in a flex row on lg, single scrollable column below
   lg (see `AdminOverview` mobile fix)

@@ -8,7 +8,7 @@ import { useLeadStats, type LeadStatsData } from "@/lib/data/useLeadStats";
 import { type SalesLead } from "@/lib/data/sales";
 import { formatKpi } from "@/lib/format";
 import { useGreeting } from "@/lib/useGreeting";
-import { type AppUser } from "@/lib/auth/users";
+import { type SessionUser } from "./Sidebar";
 import { useRbac } from "@/lib/rbac/RbacProvider";
 import { type Role } from "@/lib/rbac/roles";
 import { Button } from "@/components/ui/button";
@@ -158,7 +158,7 @@ function OverviewHeader({
 }: {
   copy: OverviewCopy;
   /** signed-in account — greeted by first name in place of the page title */
-  user?: AppUser;
+  user?: SessionUser;
   metaLabel: string;
   metaValue: string;
   demo?: boolean;
@@ -291,7 +291,7 @@ const SHELL = "flex min-h-full flex-col px-4 py-5 sm:px-6";
  * simply never mounts `useLeadStats`, meaning a rep's browser never even
  * requests the admin-wide leads table.
  */
-export function OverviewPage({ user }: { user?: AppUser }) {
+export function OverviewPage({ user }: { user?: SessionUser }) {
   const { role } = useRbac();
   return role === "sales" ? (
     <SalesOverview user={user} />
@@ -302,7 +302,7 @@ export function OverviewPage({ user }: { user?: AppUser }) {
 
 /* ─────────────────────  admin / client: the pipeline  ───────────────────── */
 
-function PipelineOverview({ role, user }: { role: Role; user?: AppUser }) {
+function PipelineOverview({ role, user }: { role: Role; user?: SessionUser }) {
   const { state, reload } = useLeadStats();
 
   const copy = copyFor(role);
@@ -381,7 +381,7 @@ function toLeadView(l: SalesLead): LeadView {
  * database: total, arrivals, volume-over-time and the latest rows are all read
  * off the hand-off ledger through `useSales`.
  */
-function SalesOverview({ user }: { user?: AppUser }) {
+function SalesOverview({ user }: { user?: SessionUser }) {
   const { stats, series, handedToday, latestHandoffAt, recent, loading, mode, error, reload } =
     useSales();
 

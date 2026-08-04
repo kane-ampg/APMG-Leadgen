@@ -5,7 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { landingTab, TAB_LABEL, TAB_PERMISSION, tabTitle, type TabId } from "@/lib/nav";
 import { useClickTelemetry } from "@/lib/telemetry";
 import { useRbac } from "@/lib/rbac/RbacProvider";
-import { type AppUser } from "@/lib/auth/users";
+import { type SessionUser } from "./Sidebar";
 import { ClickPing } from "./ClickPing";
 import { CommandBar } from "./CommandBar";
 import { ClosedDealsPage } from "./ClosedDealsPage";
@@ -31,7 +31,7 @@ import { TelemetryPage } from "./TelemetryPage";
  * Root shell (ui-standards §1.1): h-dvh overflow-hidden flex → sidebar + main.
  * Content scrolls inside the main area, never the page body.
  */
-export function DashboardShell({ user }: { user?: AppUser }) {
+export function DashboardShell({ user }: { user?: SessionUser }) {
   const reduce = useReducedMotion();
   const { can, role } = useRbac();
   // Open on the signed-in role's home surface: admins get the console

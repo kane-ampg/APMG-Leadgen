@@ -14,16 +14,12 @@ import { useHotLeadsWaiting } from "@/lib/data/hotLeads";
 import { formatInt } from "@/lib/format";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { useRbac } from "@/lib/rbac/RbacProvider";
+import { type AppUser } from "@/lib/auth/users";
+import { clearSessionCookies } from "@/lib/auth/session";
 import { useSales } from "./SalesProvider";
 import { RoleSwitcher } from "@/components/rbac/RoleSwitcher";
 import { SignalLed } from "./SignalLed";
 import { ThemeToggle } from "./ThemeToggle";
-
-export interface SessionUser {
-  email: string;
-  name: string;
-  initials: string;
-}
 
 interface SidebarProps {
   activeTab: TabId;
@@ -33,7 +29,7 @@ interface SidebarProps {
   /** make the drawer unreachable while a modal (the inspector) is open */
   inert?: boolean;
   /** signed-in session user (via /login); falls back to the operator card */
-  user?: SessionUser;
+  user?: AppUser;
 }
 
 /**
@@ -57,7 +53,7 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
   const salesBadge = salesQueueTotal > 0 ? formatInt(salesQueueTotal) : undefined;
   // Hot Leads badge = leads scoring above the hot cut-off that HAVEN'T been
   // handed to Sales yet — a work queue, so it's hidden once it's cleared.
-  const hotWaiting = useHotLeadsWaiting(can("hotleads.view"));
+  const hotWaiting = useHotLeadsWaiting();
   const hotBadge = hotWaiting > 0 ? formatInt(hotWaiting) : undefined;
   const ref = useRef<HTMLElement>(null);
   // Trap focus inside the drawer while it's open as a mobile overlay.
@@ -289,19 +285,19 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
           )}
         >
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-solid text-[11px] font-semibold text-primary-foreground">
-            {user?.initials ?? "—"}
+            {user?.initials ?? "KR"}
           </div>
           <div className={cn("min-w-0 flex-1", collapsed && "md:hidden")}>
             <div className="flex items-center gap-1.5">
               <span className="truncate text-[13px] font-medium text-foreground">
-                {user?.name ?? "Signed in"}
+                {user?.name ?? "Kane Reroma"}
               </span>
               <span className="shrink-0 rounded border border-border px-1 py-px font-mono text-[8.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
                 {roleLabel}
               </span>
             </div>
             <div className="mt-px truncate font-mono text-[11px] text-muted-foreground">
-              {user?.email ?? ""}
+              {user?.email ?? "kane@apmgservices.com.au"}
             </div>
           </div>
           <button
@@ -321,9 +317,8 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
           data-track="sign_out"
           aria-label={collapsed ? "Sign out" : undefined}
           title={collapsed ? "Sign out" : undefined}
-          onClick={async () => {
-            // HttpOnly cookies can't be cleared from JS — the server does it.
-            await fetch("/api/auth/signout", { method: "POST" });
+          onClick={() => {
+            clearSessionCookies();
             window.location.assign("/login");
           }}
           className="mt-2 w-full justify-start gap-3 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"

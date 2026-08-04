@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Plus_Jakarta_Sans } from "next/font/google";
-import { cookies } from "next/headers";
-import { themeBootstrap } from "@/lib/themeBootstrap";
-import { THEME_SEED_COOKIE } from "@/lib/auth/session";
+import { THEME_BOOTSTRAP } from "@/lib/theme";
 import "./globals.css";
 
 const sans = Inter({
@@ -26,19 +24,15 @@ export const metadata: Metadata = {
     "Live lead-generation telemetry for APMG Services: volume, conversion, and cost per lead at a glance.",
 };
 
-export default async function RootLayout({
+export default function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  // Set by the OAuth callback from the signed-in user's role — reps get light,
-  // everyone else dark. localStorage still wins once the toggle has been used.
-  const seed = (await cookies()).get(THEME_SEED_COOKIE)?.value === "light" ? "light" : "dark";
-
   return (
     <html
       lang="en"
-      className={`${sans.variable} ${heading.variable} ${seed === "dark" ? "dark" : ""}`}
+      className={`${sans.variable} ${heading.variable} dark`}
       suppressHydrationWarning
     >
       <head>
@@ -56,7 +50,7 @@ export default async function RootLayout({
           from the SSR'd HTML, and only needs to run once) for a real,
           user-visible flash of the wrong theme. Not a good trade.
         */}
-        <script dangerouslySetInnerHTML={{ __html: themeBootstrap(seed) }} />
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }} />
       </head>
       <body className="font-sans antialiased">{children}</body>
     </html>

@@ -5,11 +5,15 @@ import {
   sameOrigin,
   supabaseTarget,
 } from "@/lib/pipeline/server";
-import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Receives a batch of parsed leads from the Pipeline tool and inserts them into
 // Supabase via the PostgREST endpoint. Runs on Node (keeps the service role key
 // server-side — it is never shipped to the browser).
+//
+// SECURITY — TODO before exposing this publicly: this route writes with the
+// service-role key, which bypasses Row Level Security. It currently has only a
+// same-origin (CSRF) floor, NOT real authentication. Add a session/role check
+// here once the app has auth, or keep this instance non-public.
 export const runtime = "nodejs";
 
 const TABLE = "leads";
@@ -70,9 +74,6 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return json({ ok: false, inserted: 0, mode: "noop", error: "Forbidden." }, 403);
   }
-
-  const guard = await requirePermission(req, "pipeline.import");
-  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

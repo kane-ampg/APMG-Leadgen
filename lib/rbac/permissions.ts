@@ -35,7 +35,6 @@ export const PERMISSIONS = {
   "enquiries.view": "View portal enquiries and service-interest analytics",
   "enquiries.manage": "Update the status of portal enquiries",
   "users.manage": "Manage users and roles",
-  "roles.viewas": "View the console as another role",
 } as const;
 
 export type Permission = keyof typeof PERMISSIONS;

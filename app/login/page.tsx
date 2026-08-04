@@ -2,7 +2,11 @@
 
 import * as React from "react";
 import Image from "next/image";
+import { Eye, EyeOff, Loader2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { authenticate } from "@/lib/auth/users";
+import { setSessionCookies } from "@/lib/auth/session";
 import brandLogo from "@/app/icon.png";
 import photoMakeSafe from "@/app/services/make-safe.png";
 import photoPreventive from "@/app/services/preventive.png";
@@ -13,6 +17,9 @@ import photoCarpentry from "@/app/services/carpentry.png";
 import photoFlooring from "@/app/services/flooring.png";
 import photoGardening from "@/app/services/gardening.png";
 import photoHandyman from "@/app/services/handyman.png";
+
+const inputClass =
+  "h-9 w-full rounded-lg border border-border bg-background px-3 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background";
 
 const SLIDES = [
   { src: photoMakeSafe, label: "Property Make Safe" },
@@ -48,6 +55,18 @@ function GoogleMark() {
         fill="#EA4335"
         d="M12 4.77c1.76 0 3.34.6 4.59 1.79l3.44-3.44A11.98 11.98 0 0 0 1.27 6.62l4.01 3.09C6.22 6.87 8.87 4.77 12 4.77Z"
       />
+    </svg>
+  );
+}
+
+/** Microsoft four-square mark, inlined so the page stays asset-free. */
+function MicrosoftMark() {
+  return (
+    <svg viewBox="0 0 23 23" className="h-4 w-4 shrink-0" aria-hidden>
+      <rect x="1" y="1" width="10" height="10" fill="#F25022" />
+      <rect x="12" y="1" width="10" height="10" fill="#7FBA00" />
+      <rect x="1" y="12" width="10" height="10" fill="#00A4EF" />
+      <rect x="12" y="12" width="10" height="10" fill="#FFB900" />
     </svg>
   );
 }
@@ -149,32 +168,57 @@ function ServiceSlideshow() {
   );
 }
 
-/** Maps the callback route's `?error=` reasons to something a human can act on. */
-const LOGIN_ERRORS: Record<string, string> = {
-  "wrong-domain": "That account isn't on the APMG domain. Sign in with your @apmgservices.com.au account.",
-  "unverified-email": "That Google account's email address isn't verified.",
-  "no-email": "Google didn't return an email address for that account.",
-  "bad-state": "The sign-in link expired or was already used. Please try again.",
-  "exchange-failed": "Google sign-in didn't complete. Please try again.",
-  "invalid-token": "Google sign-in couldn't be verified. Please try again.",
-  "google-denied": "Sign-in was cancelled.",
-};
+export default function LoginPage() {
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
+  const [showPassword, setShowPassword] = React.useState(false);
+  const [submitting, setSubmitting] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
 
-export default function LoginPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ next?: string; error?: string }>;
-}) {
-  const params = React.use(searchParams);
-  const next = params.next ? `?next=${encodeURIComponent(params.next)}` : "";
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email.trim() || !password) {
+      setError("Enter your email and password to sign in.");
+      return;
+    }
+    const user = authenticate(email, password);
+    if (!user) {
+      setError("Invalid email or password.");
+      return;
+    }
+    setError(null);
+    setSubmitting(true);
+    // The user's fixed role (sales for the test reps) travels via cookies the
+    // server page reads — a full navigation so it re-renders with the session.
+    setSessionCookies(user);
+    window.location.assign("/");
+  }
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-background px-4 py-10">
+      {/* One connected card: form on the left, service slideshow on the right,
+          sharing a single border and radius. */}
+      {/* Image column gets the lion's share of the width — the form keeps a
+          fixed comfortable measure and the photos stretch wide beside it. */}
       <div className="grid w-full max-w-5xl overflow-hidden rounded-xl border border-border bg-card shadow-sm lg:grid-cols-[24rem_minmax(0,1fr)]">
-        <div className="flex min-h-[38rem] flex-col justify-center p-6 sm:px-10 sm:py-12">
+        {/* Sign-in panel — the form sets the card's height (min-h + roomier
+            spacing); the image column just object-covers whatever it gets. */}
+        <form
+          onSubmit={handleSubmit}
+          noValidate
+          className="flex min-h-[38rem] flex-col justify-center p-6 sm:px-10 sm:py-12"
+        >
           <div className="mb-8 flex flex-col items-center gap-3 text-center">
+            {/* Same white-wordmark-on-red tile as the sidebar (§17.8). */}
             <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary-solid">
-              <Image src={brandLogo} alt="APMG" width={36} height={28} priority className="object-contain" />
+              <Image
+                src={brandLogo}
+                alt="APMG"
+                width={36}
+                height={28}
+                priority
+                className="object-contain"
+              />
             </div>
             <div>
               <h1 className="font-heading text-lg font-semibold tracking-tight text-foreground">
@@ -186,31 +230,97 @@ export default function LoginPage({
             </div>
           </div>
 
-          {params.error && (
-            <p role="alert" className="mb-5 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              {LOGIN_ERRORS[params.error] ?? "Sign-in failed. Please try again."}
-            </p>
-          )}
+          <div className="space-y-5">
+            <div className="space-y-1.5">
+              <label htmlFor="email" className="text-xs font-medium text-foreground">
+                Email
+              </label>
+              <input
+                id="email"
+                type="email"
+                autoComplete="email"
+                placeholder="you@apmgservices.com.au"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className={inputClass}
+              />
+            </div>
 
-          {/* A plain <a>, not <Button>: Button renders a <button> and has no
-              asChild escape hatch, and sign-in must work without JS anyway.
-              Classes are Button's base + default variant + lg size, copied
-              from components/ui/button.tsx. */}
-          <a
-            href={`/api/auth/google/start${next}`}
-            data-track="sso_google"
-            className="inline-flex h-9 w-full items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-primary-solid px-4 text-sm font-medium text-primary-foreground shadow-sm shadow-signal-900/30 transition-colors hover:bg-primary-solid/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:translate-y-px"
-          >
-            <GoogleMark />
-            Continue with Google
-          </a>
+            <div className="space-y-1.5">
+              <label htmlFor="password" className="text-xs font-medium text-foreground">
+                Password
+              </label>
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className={cn(inputClass, "pr-10")}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-muted-foreground hover:text-foreground"
+                >
+                  {showPassword ? (
+                    <EyeOff className="h-4 w-4" aria-hidden />
+                  ) : (
+                    <Eye className="h-4 w-4" aria-hidden />
+                  )}
+                </button>
+              </div>
+            </div>
 
-          <p className="mt-5 text-center text-[11px] leading-relaxed text-muted-foreground">
-            Use your APMG Google account. Access is granted by an administrator —
-            if this is your first sign-in, someone will need to approve you.
-          </p>
-        </div>
+            {error && (
+              <p role="alert" className="text-xs text-destructive">
+                {error}
+              </p>
+            )}
 
+            <Button type="submit" size="lg" disabled={submitting} className="w-full">
+              {submitting && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
+              Sign in
+            </Button>
+
+            {/* SSO placeholders — not wired to a provider yet */}
+            <div className="flex items-center gap-3 py-1">
+              <span className="h-px flex-1 bg-border" aria-hidden />
+              <span className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                or continue with
+              </span>
+              <span className="h-px flex-1 bg-border" aria-hidden />
+            </div>
+
+            <div className="space-y-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                title="Single sign-on coming soon"
+                className="w-full"
+              >
+                <GoogleMark />
+                Sign in with Google SSO
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                title="Single sign-on coming soon"
+                className="w-full"
+              >
+                <MicrosoftMark />
+                Microsoft Entra ID
+              </Button>
+            </div>
+          </div>
+        </form>
+
+        {/* Rotating service-photo panel (desktop only) */}
         <ServiceSlideshow />
       </div>
     </main>

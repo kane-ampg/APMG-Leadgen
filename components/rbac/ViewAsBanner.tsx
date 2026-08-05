@@ -26,7 +26,7 @@ export function ViewAsBanner() {
   return (
     <div
       role="status"
-      className="flex shrink-0 items-center justify-center gap-3 bg-primary-solid px-3 py-1.5 text-xs font-medium text-primary-foreground"
+      className="relative z-[60] flex shrink-0 items-center justify-center gap-3 bg-primary-solid px-3 py-1.5 text-xs font-medium text-primary-foreground"
     >
       <span>
         Viewing as <span className="font-semibold">{ROLES[role].label}</span>

@@ -95,7 +95,12 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
         // md:relative + md:z-30 (not md:static/md:z-auto): the retract handle
         // overhangs the right border via -right-3, so the sidebar must own a
         // positioned stacking context above <main> or the handle is painted over.
-        "fixed inset-y-0 left-0 z-50 flex h-dvh shrink-0 flex-col border-r border-border bg-card px-5 pb-4 pt-7 outline-none [transition:width_500ms_cubic-bezier(0.16,1,0.3,1),transform_300ms_ease-out] md:relative md:z-30 md:translate-x-0",
+        // h-dvh only up to md: fixed positioning (mobile) needs an explicit
+        // height since it escapes normal layout. From md up this is a flex
+        // item in DashboardShell's row and must stretch to fill it instead —
+        // md:h-auto lets flex's default align-items:stretch do that, rather
+        // than overflowing the row whenever ViewAsBanner adds height above it.
+        "fixed inset-y-0 left-0 z-50 flex h-dvh shrink-0 flex-col border-r border-border bg-card px-5 pb-4 pt-7 outline-none [transition:width_500ms_cubic-bezier(0.16,1,0.3,1),transform_300ms_ease-out] md:relative md:h-auto md:z-30 md:translate-x-0",
         // width: full drawer on mobile; retractable icon rail on desktop
         collapsed ? "w-[248px] md:w-[76px]" : "w-[248px]",
         mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",

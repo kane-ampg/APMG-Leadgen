@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { landingTab, TAB_LABEL, TAB_PERMISSION, tabTitle, type TabId } from "@/lib/nav";
 import { useClickTelemetry } from "@/lib/telemetry";
 import { useRbac } from "@/lib/rbac/RbacProvider";
+import { ViewAsBanner } from "@/components/rbac/ViewAsBanner";
 import { type SessionUser } from "./Sidebar";
 import { ClickPing } from "./ClickPing";
 import { CommandBar } from "./CommandBar";
@@ -74,89 +75,93 @@ export function DashboardShell({ user }: { user?: SessionUser }) {
   }
 
   return (
-    <div className="flex h-dvh max-h-dvh w-full overflow-hidden">
-      <Sidebar
-        activeTab={activeTab}
-        onNavigate={navigate}
-        mobileOpen={navOpen}
-        onClose={() => setNavOpen(false)}
-        inert={inspectorOpen}
-        user={user}
-      />
+    <div className="flex h-dvh max-h-dvh w-full flex-col overflow-hidden">
+      <ViewAsBanner />
 
-      {/* mobile drawer backdrop */}
-      {navOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/50 backdrop-blur-[1px] md:hidden"
-          onClick={() => setNavOpen(false)}
-          aria-hidden
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <Sidebar
+          activeTab={activeTab}
+          onNavigate={navigate}
+          mobileOpen={navOpen}
+          onClose={() => setNavOpen(false)}
+          inert={inspectorOpen}
+          user={user}
         />
-      )}
 
-      <main
-        inert={navOpen || inspectorOpen || undefined}
-        className="chassis-grain relative flex min-w-0 flex-1 flex-col overflow-hidden"
-      >
-        <div className="relative z-10 flex min-h-0 flex-1 flex-col">
-          <MobileHeader
-            label={TAB_LABEL[activeTab]}
-            navOpen={navOpen}
-            onOpenNav={() => setNavOpen(true)}
+        {/* mobile drawer backdrop */}
+        {navOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-black/50 backdrop-blur-[1px] md:hidden"
+            onClick={() => setNavOpen(false)}
+            aria-hidden
           />
-          {/* The command bar is internal chrome ("Lead Desk", signal ticker,
-              telemetry). The Our Services tab is the customer-facing portal —
-              that operator identity reads wrong to a client, so it's hidden
-              there for every role (the mobile header stays for navigation). */}
-          {activeTab !== "services" && (
-            <CommandBar activeTab={activeTab} onOpenTelemetry={() => setInspectorOpen(true)} />
-          )}
+        )}
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <AnimatePresence mode="wait" initial={false}>
-              <motion.div
-                key={activeTab}
-                initial={reduce ? false : { opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={reduce ? { opacity: 0 } : { opacity: 0, y: -6 }}
-                transition={{ duration: reduce ? 0 : 0.26, ease: [0.22, 1, 0.36, 1] }}
-                className="min-h-full"
-              >
-                {activeTab === "services" ? (
-                  <ServicesPortal />
-                ) : activeTab === "overview" ? (
-                  <OverviewPage user={user} />
-                ) : activeTab === "pipeline" ? (
-                  <PipelinePage />
-                ) : activeTab === "leads" ? (
-                  <LeadsPage />
-                ) : activeTab === "hot" ? (
-                  <HotLeadsPage />
-                ) : activeTab === "enquiries" ? (
-                  <EnquiriesPage />
-                ) : activeTab === "sales" ? (
-                  <SalesPage />
-                ) : activeTab === "closed" ? (
-                  <ClosedDealsPage />
-                ) : activeTab === "integrations" ? (
-                  <IntegrationsPage />
-                ) : activeTab === "playbooks" ? (
-                  <SectorPlaybooksPage />
-                ) : activeTab === "composer" ? (
-                  <ComposerConfigPage />
-                ) : activeTab === "legal" ? (
-                  <LegalDocsPage />
-                ) : activeTab === "telemetry" ? (
-                  <TelemetryPage />
-                ) : activeTab === "settings" ? (
-                  <SettingsPage />
-                ) : (
-                  <ComingSoon tab={activeTab} />
-                )}
-              </motion.div>
-            </AnimatePresence>
+        <main
+          inert={navOpen || inspectorOpen || undefined}
+          className="chassis-grain relative flex min-w-0 flex-1 flex-col overflow-hidden"
+        >
+          <div className="relative z-10 flex min-h-0 flex-1 flex-col">
+            <MobileHeader
+              label={TAB_LABEL[activeTab]}
+              navOpen={navOpen}
+              onOpenNav={() => setNavOpen(true)}
+            />
+            {/* The command bar is internal chrome ("Lead Desk", signal ticker,
+                telemetry). The Our Services tab is the customer-facing portal —
+                that operator identity reads wrong to a client, so it's hidden
+                there for every role (the mobile header stays for navigation). */}
+            {activeTab !== "services" && (
+              <CommandBar activeTab={activeTab} onOpenTelemetry={() => setInspectorOpen(true)} />
+            )}
+
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <AnimatePresence mode="wait" initial={false}>
+                <motion.div
+                  key={activeTab}
+                  initial={reduce ? false : { opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={reduce ? { opacity: 0 } : { opacity: 0, y: -6 }}
+                  transition={{ duration: reduce ? 0 : 0.26, ease: [0.22, 1, 0.36, 1] }}
+                  className="min-h-full"
+                >
+                  {activeTab === "services" ? (
+                    <ServicesPortal />
+                  ) : activeTab === "overview" ? (
+                    <OverviewPage user={user} />
+                  ) : activeTab === "pipeline" ? (
+                    <PipelinePage />
+                  ) : activeTab === "leads" ? (
+                    <LeadsPage />
+                  ) : activeTab === "hot" ? (
+                    <HotLeadsPage />
+                  ) : activeTab === "enquiries" ? (
+                    <EnquiriesPage />
+                  ) : activeTab === "sales" ? (
+                    <SalesPage />
+                  ) : activeTab === "closed" ? (
+                    <ClosedDealsPage />
+                  ) : activeTab === "integrations" ? (
+                    <IntegrationsPage />
+                  ) : activeTab === "playbooks" ? (
+                    <SectorPlaybooksPage />
+                  ) : activeTab === "composer" ? (
+                    <ComposerConfigPage />
+                  ) : activeTab === "legal" ? (
+                    <LegalDocsPage />
+                  ) : activeTab === "telemetry" ? (
+                    <TelemetryPage />
+                  ) : activeTab === "settings" ? (
+                    <SettingsPage />
+                  ) : (
+                    <ComingSoon tab={activeTab} />
+                  )}
+                </motion.div>
+              </AnimatePresence>
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
 
       {/* Shell-level so new work from admin announces itself on ANY surface —
           from Overview, Enquiries, wherever. Suppressed on the Sales tab, where

@@ -1,83 +1,53 @@
 "use client";
 
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 import { type Permission } from "./permissions";
-import { DEFAULT_ROLE, isRole, ROLES, roleCan, type Role } from "./roles";
-
-const STORAGE_KEY = "apmg-role";
-const DEV = process.env.NODE_ENV !== "production";
+import { ROLES, roleCan, type Role } from "./roles";
 
 interface RbacValue {
+  /** Effective role: trueRole, or an authorised view-as override. */
   role: Role;
   roleLabel: string;
   can: (perm: Permission) => boolean;
-  /** dev-only role preview; in production the role comes from the session */
-  setRole: (role: Role) => void;
-  devMode: boolean;
+  /** What app_users actually says this user is. The view-as switcher and
+   *  banner key off THIS, never off `role` — otherwise an admin previewing a
+   *  role that itself lacks roles.viewas (every non-admin role) would have
+   *  no way back to their own console. */
+  trueRole: Role;
+  /** Whether this user may preview the console as another role. */
+  canViewAs: boolean;
 }
 
 const RbacContext = createContext<RbacValue | null>(null);
 
 /**
- * Provides the current user's role + permission checks. `initialRole` is the
- * server-resolved session role (defaults to admin until Supabase auth lands).
- * In dev only, a persisted override lets you preview other roles — unless
- * `locked` (a real signed-in session): then the session role is final and the
- * role preview is disabled, so a sales rep can never see the admin console.
+ * Provides the current user's role + permission checks. Both `role` and
+ * `trueRole` come straight from the server-resolved session (see
+ * lib/rbac/server.ts's resolveSession) — middleware guarantees a valid
+ * session exists before this ever mounts, so there is no unauthenticated or
+ * client-editable state here. (Earlier revisions of this file had a
+ * dev-only, unauthenticated role preview; app/page.tsx has unconditionally
+ * passed a real, server-resolved role since Phase 1, which made that
+ * mechanism permanently unreachable. It's gone — this is the real thing.)
  */
 export function RbacProvider({
-  initialRole = DEFAULT_ROLE,
-  locked = false,
+  role,
+  trueRole,
   children,
 }: {
-  initialRole?: Role;
-  locked?: boolean;
+  role: Role;
+  trueRole: Role;
   children: ReactNode;
 }) {
-  const [role, setRoleState] = useState<Role>(initialRole);
-
-  useEffect(() => {
-    if (!DEV || locked) return;
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (isRole(saved) && ROLES[saved].enabled) setRoleState(saved);
-    } catch {
-      /* storage unavailable — keep initialRole */
-    }
-  }, [locked]);
-
-  const setRole = useCallback(
-    (next: Role) => {
-      if (locked) return;
-      setRoleState(next);
-      if (DEV) {
-        try {
-          localStorage.setItem(STORAGE_KEY, next);
-        } catch {
-          /* ignore */
-        }
-      }
-    },
-    [locked],
-  );
-
   const value = useMemo<RbacValue>(
     () => ({
       role,
       roleLabel: ROLES[role].label,
       can: (perm: Permission) => roleCan(role, perm),
-      setRole,
-      devMode: DEV && !locked,
+      trueRole,
+      canViewAs: roleCan(trueRole, "roles.viewas"),
     }),
-    [role, setRole, locked],
+    [role, trueRole],
   );
 
   return <RbacContext.Provider value={value}>{children}</RbacContext.Provider>;

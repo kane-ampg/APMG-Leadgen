@@ -1,10 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { THEME_STORAGE_KEY, type Theme } from "@/lib/themeBootstrap";
 
-export type Theme = "dark" | "light";
-
-const STORAGE_KEY = "apmg-theme";
+export type { Theme };
 
 /**
  * Wrap a state mutation so browsers that support the View Transitions API
@@ -46,7 +45,7 @@ export function useTheme() {
     root.classList.toggle("dark", next === "dark");
     root.style.colorScheme = next;
     try {
-      localStorage.setItem(STORAGE_KEY, next);
+      localStorage.setItem(THEME_STORAGE_KEY, next);
     } catch {
       /* private mode / storage disabled — non-fatal */
     }
@@ -61,32 +60,6 @@ export function useTheme() {
 }
 
 /**
- * Inline script string injected before paint so the persisted theme (or the
- * given fallback) is applied with no flash of the wrong one.
- *
- * The operator console defaults to dark (ui-standards §4.2). The Sales desk
- * defaults to LIGHT — reps work it in daylight, often on a phone, and dark
- * chrome under glare is the first thing to cost legibility. Either way an
- * explicit choice from the toggle is stored and always wins from then on, so
- * the fallback only ever decides the very first visit.
- */
-export function themeBootstrap(fallback: Theme = "dark"): string {
-  return (
-    `(function(){try{` +
-    `var t=localStorage.getItem('${STORAGE_KEY}');` +
-    `if(t!=='light'&&t!=='dark'){t='${fallback}';}` +
-    `var r=document.documentElement;` +
-    `r.classList.toggle('dark',t==='dark');r.style.colorScheme=t;` +
-    `}catch(e){` +
-    `document.documentElement.classList.toggle('dark','${fallback}'==='dark');` +
-    `}})();`
-  );
-}
-
-/** Console default (dark) — injected by the root layout. */
-export const THEME_BOOTSTRAP = themeBootstrap("dark");
-
-/**
  * Seed the theme a role should START in, at sign-in — before the console is
  * ever rendered, so there is nothing to flash.
  *
@@ -97,11 +70,11 @@ export const THEME_BOOTSTRAP = themeBootstrap("dark");
  */
 export function seedThemeForRole(role: string): void {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
     if (stored === "light" || stored === "dark") return;
     // Reps work the desk in daylight, often on a phone — dark chrome under
     // glare is the first thing to cost legibility.
-    localStorage.setItem(STORAGE_KEY, role === "sales" ? "light" : "dark");
+    localStorage.setItem(THEME_STORAGE_KEY, role === "sales" ? "light" : "dark");
   } catch {
     /* private mode / storage disabled — the layout default applies */
   }

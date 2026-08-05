@@ -1,15 +1,13 @@
 import { sameOrigin } from "@/lib/pipeline/server";
 import { loadPlaybooks, savePlaybooks } from "@/lib/pipeline/sectorStore";
 import { isSectorSlug, MAX_KB_CONTENT, mergePlaybooks } from "@/lib/pipeline/sectors";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Upload / remove the knowledge-base markdown for one sector (Sector Playbooks
 // tab). The uploaded .md text is stored inline in the
 // app_settings["sector_playbooks"] mapping and overrides the repo file
 // (components/knowledgebase/<slug>.md) as the KB that grounds the outreach
 // email. Server-side (keeps the service role key off the browser).
-//
-// SECURITY — TODO: same-origin (CSRF) floor only; gate on `playbooks.manage`
-// once auth lands.
 export const runtime = "nodejs";
 
 function persistError(result: "demo" | "missing-table" | "error"): Response {
@@ -29,6 +27,9 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "playbooks.manage");
+  if (!guard.ok) return guardResponse(guard);
 
   let form: FormData;
   try {
@@ -90,6 +91,9 @@ export async function DELETE(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "playbooks.manage");
+  if (!guard.ok) return guardResponse(guard);
 
   const slug = new URL(req.url).searchParams.get("slug") ?? "";
   if (!isSectorSlug(slug)) {

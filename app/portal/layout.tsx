@@ -2,7 +2,7 @@
  * Layout for the public customer-facing portal (/portal).
  *
  * The rest of the app is dark-first (the "signal console" identity, §17.8) —
- * the root layout stamps `dark` on <html> and THEME_BOOTSTRAP forces it before
+ * the root layout stamps `dark` on <html> and `themeBootstrap` forces it before
  * paint. The customer portal is the trust surface, so it opens in LIGHT
  * instead. There is no theme toggle on this route (it lives only in the
  * internal Sidebar), so light is applied unconditionally.

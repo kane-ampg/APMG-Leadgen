@@ -15,6 +15,7 @@ import { buildComposeKb, loadPlaybooks } from "@/lib/pipeline/sectorStore";
 import { draftEmail } from "@/lib/ai/composeEmail";
 import { COMPOSE_ANGLES } from "@/lib/ai/composePrompt";
 import { loadComposePrompt, type ComposePromptConfig } from "@/lib/ai/composeStore";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // "Compose email": drafts a per-lead cold email in-app with the Claude API
 // (lib/ai/composeEmail.ts), grounded in the sector knowledge base for the
@@ -28,9 +29,6 @@ import { loadComposePrompt, type ComposePromptConfig } from "@/lib/ai/composeSto
 // falls back to the deterministic template (campaign.ts demoDraft) on any miss;
 // with no key we return the template for every lead (demo mode) so the review
 // UI is fully exercisable.
-//
-// SECURITY — TODO before exposing publicly: same-origin (CSRF) floor only, NOT
-// real auth; enforce the `campaigns.send` permission here too once auth lands.
 export const runtime = "nodejs";
 // Leads are drafted through a small concurrency pool (one Claude call each) so
 // a big request still takes minutes; give serverless deploys the platform max —
@@ -124,6 +122,9 @@ export async function POST(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return json({ ok: false, mode: "noop", error: "Forbidden." }, 403);
   }
+
+  const guard = await requirePermission(req, "campaigns.send");
+  if (!guard.ok) return guardResponse(guard);
 
   let body: unknown;
   try {

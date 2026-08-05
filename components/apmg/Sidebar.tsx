@@ -14,12 +14,16 @@ import { useHotLeadsWaiting } from "@/lib/data/hotLeads";
 import { formatInt } from "@/lib/format";
 import { useFocusTrap } from "@/lib/useFocusTrap";
 import { useRbac } from "@/lib/rbac/RbacProvider";
-import { type AppUser } from "@/lib/auth/users";
-import { clearSessionCookies } from "@/lib/auth/session";
 import { useSales } from "./SalesProvider";
 import { RoleSwitcher } from "@/components/rbac/RoleSwitcher";
 import { SignalLed } from "./SignalLed";
 import { ThemeToggle } from "./ThemeToggle";
+
+export interface SessionUser {
+  email: string;
+  name: string;
+  initials: string;
+}
 
 interface SidebarProps {
   activeTab: TabId;
@@ -29,7 +33,7 @@ interface SidebarProps {
   /** make the drawer unreachable while a modal (the inspector) is open */
   inert?: boolean;
   /** signed-in session user (via /login); falls back to the operator card */
-  user?: AppUser;
+  user?: SessionUser;
 }
 
 /**
@@ -53,7 +57,7 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
   const salesBadge = salesQueueTotal > 0 ? formatInt(salesQueueTotal) : undefined;
   // Hot Leads badge = leads scoring above the hot cut-off that HAVEN'T been
   // handed to Sales yet — a work queue, so it's hidden once it's cleared.
-  const hotWaiting = useHotLeadsWaiting();
+  const hotWaiting = useHotLeadsWaiting(can("hotleads.view"));
   const hotBadge = hotWaiting > 0 ? formatInt(hotWaiting) : undefined;
   const ref = useRef<HTMLElement>(null);
   // Trap focus inside the drawer while it's open as a mobile overlay.
@@ -91,7 +95,12 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
         // md:relative + md:z-30 (not md:static/md:z-auto): the retract handle
         // overhangs the right border via -right-3, so the sidebar must own a
         // positioned stacking context above <main> or the handle is painted over.
-        "fixed inset-y-0 left-0 z-50 flex h-dvh shrink-0 flex-col border-r border-border bg-card px-5 pb-4 pt-7 outline-none [transition:width_500ms_cubic-bezier(0.16,1,0.3,1),transform_300ms_ease-out] md:relative md:z-30 md:translate-x-0",
+        // h-dvh only up to md: fixed positioning (mobile) needs an explicit
+        // height since it escapes normal layout. From md up this is a flex
+        // item in DashboardShell's row and must stretch to fill it instead —
+        // md:h-auto lets flex's default align-items:stretch do that, rather
+        // than overflowing the row whenever ViewAsBanner adds height above it.
+        "fixed inset-y-0 left-0 z-50 flex h-dvh shrink-0 flex-col border-r border-border bg-card px-5 pb-4 pt-7 outline-none [transition:width_500ms_cubic-bezier(0.16,1,0.3,1),transform_300ms_ease-out] md:relative md:h-auto md:z-30 md:translate-x-0",
         // width: full drawer on mobile; retractable icon rail on desktop
         collapsed ? "w-[248px] md:w-[76px]" : "w-[248px]",
         mobileOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0",
@@ -285,19 +294,19 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
           )}
         >
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-solid text-[11px] font-semibold text-primary-foreground">
-            {user?.initials ?? "KR"}
+            {user?.initials ?? "—"}
           </div>
           <div className={cn("min-w-0 flex-1", collapsed && "md:hidden")}>
             <div className="flex items-center gap-1.5">
               <span className="truncate text-[13px] font-medium text-foreground">
-                {user?.name ?? "Kane Reroma"}
+                {user?.name ?? "Signed in"}
               </span>
               <span className="shrink-0 rounded border border-border px-1 py-px font-mono text-[8.5px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">
                 {roleLabel}
               </span>
             </div>
             <div className="mt-px truncate font-mono text-[11px] text-muted-foreground">
-              {user?.email ?? "kane@apmgservices.com.au"}
+              {user?.email ?? ""}
             </div>
           </div>
           <button
@@ -317,8 +326,9 @@ export function Sidebar({ activeTab, onNavigate, mobileOpen, onClose, inert, use
           data-track="sign_out"
           aria-label={collapsed ? "Sign out" : undefined}
           title={collapsed ? "Sign out" : undefined}
-          onClick={() => {
-            clearSessionCookies();
+          onClick={async () => {
+            // HttpOnly cookies can't be cleared from JS — the server does it.
+            await fetch("/api/auth/signout", { method: "POST" });
             window.location.assign("/login");
           }}
           className="mt-2 w-full justify-start gap-3 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"

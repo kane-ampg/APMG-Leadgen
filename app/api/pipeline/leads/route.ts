@@ -7,6 +7,7 @@ import {
   UNGROUPED,
 } from "@/lib/pipeline/server";
 import { countEmailsSentByLead } from "@/lib/portal/server";
+import { guardResponse, requirePermission } from "@/lib/rbac/server";
 
 // Reads back (GET) and deletes (DELETE) stored leads for the Pipeline view.
 // Server-side (keeps the service role key off the browser).
@@ -49,6 +50,9 @@ export async function GET(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, mode: "live", rows: [], total: 0, error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "leads.view");
+  if (!guard.ok) return guardResponse(guard);
 
   const target = supabaseTarget();
   if (target.state === "demo") {
@@ -175,6 +179,9 @@ export async function PATCH(req: Request): Promise<Response> {
     return Response.json({ ok: false, mode: "live", error: "Forbidden." }, { status: 403 });
   }
 
+  const guard = await requirePermission(req, "pipeline.import");
+  if (!guard.ok) return guardResponse(guard);
+
   const body = (await req.json().catch(() => null)) as
     | { batch?: unknown; newBatch?: unknown }
     | null;
@@ -265,6 +272,9 @@ export async function DELETE(req: Request): Promise<Response> {
   if (!sameOrigin(req)) {
     return Response.json({ ok: false, deleted: 0, mode: "live", error: "Forbidden." }, { status: 403 });
   }
+
+  const guard = await requirePermission(req, "pipeline.import");
+  if (!guard.ok) return guardResponse(guard);
 
   const params = new URL(req.url).searchParams;
   const idsParam = params.get("ids");

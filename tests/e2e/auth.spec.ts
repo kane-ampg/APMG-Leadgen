@@ -33,6 +33,11 @@ test("admin API routes reject anonymous callers", async ({ request }) => {
   }
 });
 
+test("the view-as endpoint rejects anonymous callers", async ({ request }) => {
+  const res = await request.post("/api/auth/view-as", { data: { role: "sales" } });
+  expect(res.status()).toBe(401);
+});
+
 test("the customer portal still loads with no session", async ({ page }) => {
   // The guard against this whole change breaking the customer-facing surface.
   const res = await page.goto("/portal");

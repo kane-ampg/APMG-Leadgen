@@ -30,10 +30,19 @@
       "Bash(bash \"C:/Users/Kane/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/review-package\" docs/superpowers/plans/2026-08-04-google-sso-phase-3.md 7878154 HEAD)",
       "Bash(bash \"C:/Users/Kane/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/task-brief\" docs/superpowers/plans/2026-08-04-google-sso-phase-3.md 3)",
       "Bash(bash \"C:/Users/Kane/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/review-package\" docs/superpowers/plans/2026-08-04-google-sso-phase-3.md 63f875f HEAD)",
-      "Bash(nslookup -type=TXT apmgmaintenance.com.au 8.8.8.8)"
+      "Bash(nslookup -type=TXT apmgmaintenance.com.au 8.8.8.8)",
+      "Bash(bash \"C:/Users/Kane/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/task-brief\" docs/superpowers/plans/2026-08-04-google-sso-phase-3.md 4)",
+      "PowerShell(taskkill /PID 26828 /F)",
+      "Bash(npx vitest *)",
+      "Bash(bash \"C:/Users/Kane/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/review-package\" docs/superpowers/plans/2026-08-04-google-sso-phase-3.md ebe2da9 HEAD)",
+      "Bash(bash \"C:/Users/Kane/.claude/plugins/cache/claude-plugins-official/superpowers/6.2.0/skills/subagent-driven-development/scripts/review-package\" docs/superpowers/plans/2026-08-04-google-sso-phase-3.md 289e755 HEAD)",
+      "Bash(git -C \"c:/Users/Kane/Desktop/APMG/leadgen\" worktree list)",
+      "Bash(sort -t: -k3)",
+      "Bash(awk -F: '{print $3\" <- \"$1\":\"$2}')"
     ],
     "additionalDirectories": [
-      "\\tmp"
+      "\\tmp",
+      "c:\\Users\\Kane\\Desktop\\APMG"
     ]
   }
 }
